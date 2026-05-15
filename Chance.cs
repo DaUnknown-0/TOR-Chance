@@ -37,7 +37,7 @@ namespace TOR_ChanceModifier {
     // ---------------------------------------------------------------------------
     public static class Chance {
         public const byte RpcId = 200;
-        private const byte ActivationRpcId = 250;
+        internal const byte ActivationRpcId = 250;
         public const int RoleIdValue = 58;   // Wert nach Shifter (57)
 
         public static List<PlayerControl> chanceList = new List<PlayerControl>();
@@ -127,6 +127,10 @@ namespace TOR_ChanceModifier {
             }
 
             Activate();
+        }
+
+        public static void ReceiveActivation() {
+            ApplyActivationState();
         }
 
         public static void OnMeetingEnded() {
@@ -296,16 +300,24 @@ namespace TOR_ChanceModifier {
     [HarmonyPriority(Priority.High)]
     static class ChanceHandleRpcPatch {
         public static bool Prefix(byte callId, MessageReader reader) {
-            if (callId != Chance.RpcId) return true;
-            try {
-                byte  pid      = reader.ReadByte();
-                float speed    = reader.ReadSingle();
-                float cooldown = reader.ReadSingle();
-                float vision   = reader.ReadSingle();
-                byte  tasks    = reader.ReadByte();
-                Chance.applyValues(pid, speed, cooldown, vision, tasks);
-            } catch { }
-            return false;  // callId 200 ist kein bekannter TOR-RPC → Original überspringen
+            if (callId == Chance.RpcId) {
+                try {
+                    byte  pid      = reader.ReadByte();
+                    float speed    = reader.ReadSingle();
+                    float cooldown = reader.ReadSingle();
+                    float vision   = reader.ReadSingle();
+                    byte  tasks    = reader.ReadByte();
+                    Chance.applyValues(pid, speed, cooldown, vision, tasks);
+                } catch { }
+                return false;  // callId 200 ist ein Chance-RPC
+            }
+
+            if (callId == Chance.ActivationRpcId) {
+                Chance.ReceiveActivation();
+                return false;
+            }
+
+            return true;
         }
     }
 
