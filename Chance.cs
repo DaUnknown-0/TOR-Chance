@@ -285,14 +285,16 @@ namespace TOR_ChanceModifier {
 
             foreach (var p in chanceList.ToList()) {
                 if (p != null && p.Data != null && !p.Data.IsDead) {
-                    sendSetValues(p, rnd);
+                    sendSetValues(p, rnd, randomizeTasks: false);
                 }
             }
         }
 
         // Sends RPC 200 from host → sets values on all clients
         // Format: playerId (byte), speed (float), cooldown (float), vision (float), tasks (byte)
-        public static void sendSetValues(PlayerControl player, System.Random rnd) {
+        // Tasks are only re-rolled when randomizeTasks=true (initial assignment);
+        // re-randomization between meetings keeps the original task count.
+        public static void sendSetValues(PlayerControl player, System.Random rnd, bool randomizeTasks = true) {
             float orderedSpeedMin = Mathf.Min(speedMin, speedMax);
             float orderedSpeedMax = Mathf.Max(speedMin, speedMax);
             float orderedCooldownMin = Mathf.Min(cooldownMin, cooldownMax);
@@ -305,7 +307,12 @@ namespace TOR_ChanceModifier {
             float speed    = orderedSpeedMin    + (float)rnd.NextDouble() * (orderedSpeedMax    - orderedSpeedMin);
             float cooldown = orderedCooldownMin + (float)rnd.NextDouble() * (orderedCooldownMax - orderedCooldownMin);
             float vision   = orderedVisionMin   + (float)rnd.NextDouble() * (orderedVisionMax   - orderedVisionMin);
-            byte  tasks    = (byte)rnd.Next(orderedTasksMin, orderedTasksMax + 1);
+            byte  tasks;
+            if (!randomizeTasks && tasksMod.TryGetValue(player.PlayerId, out byte existingTasks)) {
+                tasks = existingTasks;
+            } else {
+                tasks = (byte)rnd.Next(orderedTasksMin, orderedTasksMax + 1);
+            }
 
             MessageWriter w = AmongUsClient.Instance.StartRpcImmediately(
                 PlayerControl.LocalPlayer.NetId, RpcId, Hazel.SendOption.Reliable, -1);
@@ -399,6 +406,23 @@ namespace TOR_ChanceModifier {
         public static void OnTasksMaxChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceTasksMin, ChanceOptions.modifierChanceTasksMax, false);
         public static void OnVisionMinChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceVisionMin, ChanceOptions.modifierChanceVisionMax, true);
         public static void OnVisionMaxChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceVisionMin, ChanceOptions.modifierChanceVisionMax, false);
+
+        // Builds the description text shown under the task list for the local player.
+        // Other players only see the generic "Everything is random!" text.
+        public static string GetChanceShortDescription(byte playerId) {
+            if (PlayerControl.LocalPlayer == null || playerId != PlayerControl.LocalPlayer.PlayerId)
+                return "Everything is random!";
+            if (!speedMod.TryGetValue(playerId, out float speed)
+                || !cooldownMod.TryGetValue(playerId, out float cd)
+                || !visionMod.TryGetValue(playerId, out float vis)
+                || !tasksMod.TryGetValue(playerId, out byte tasks))
+                return "Everything is random!";
+
+            return $"Speed {speed:0.00}× | " +
+                   $"Cooldown {cd:0.0}s | " +
+                   $"Vision {vis:0.00}× | " +
+                   $"Tasks {tasks}";
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -477,11 +501,10 @@ namespace TOR_ChanceModifier {
     static class ChanceMurderAttemptPatch {
         public static void Postfix(PlayerControl killer, PlayerControl target, ref MurderAttemptResult __result) {
             if (__result != MurderAttemptResult.PerformKill) return;
-            if (killer == null || target == null) return;
+            if (killer == null) return;
             if (!Chance.IsChancePlayer(killer.PlayerId)) return;
 
-            bool killSucceeds = rnd.NextDouble() * 100f < Chance.killDeathChance;
-            if (!killSucceeds) {
+            if (rnd.NextDouble() * 100f >= Chance.killDeathChance) {
                 __result = MurderAttemptResult.BlankKill;
             }
         }
@@ -492,22 +515,16 @@ namespace TOR_ChanceModifier {
     // ---------------------------------------------------------------------------
     [HarmonyPatch(typeof(RoleInfo), nameof(RoleInfo.getRoleInfoForPlayer))]
     static class ChanceRoleInfoPatch {
-        static RoleInfo chanceInfo;
-        static RoleInfo getInfo() {
-            if (chanceInfo == null)
-                chanceInfo = new RoleInfo(
+        public static void Postfix(PlayerControl p, bool showModifier, List<RoleInfo> __result) {
+            if (showModifier && Chance.isChance(p.PlayerId)) {
+                __result.Add(new RoleInfo(
                     "Chance",
                     new Color32(255, 140, 0, byte.MaxValue),
                     "Everything about you is random!",
-                    "Everything is random!",
+                    Chance.GetChanceShortDescription(p.PlayerId),
                     (RoleId)Chance.RoleIdValue,
-                    isNeutral: false, isModifier: true);
-            return chanceInfo;
-        }
-
-        public static void Postfix(PlayerControl p, bool showModifier, List<RoleInfo> __result) {
-            if (showModifier && Chance.isChance(p.PlayerId))
-                __result.Add(getInfo());
+                    isNeutral: false, isModifier: true));
+            }
         }
     }
 
