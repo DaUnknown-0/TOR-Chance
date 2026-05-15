@@ -6,10 +6,10 @@
         <PlatformTarget>AnyCPU</PlatformTarget>
         <AssemblyName>TOR-ChanceModifier</AssemblyName>
         <Version>1.0.0</Version>
-        <Description>Chance – Alles ist zufällig! Modifier für TheOtherRoles</Description>
+        <Description>Chance – Everything is random! Modifier for TheOtherRoles</Description>
     </PropertyGroup>
 
-    <!-- Dieselben Packages wie TOR -->
+    <!-- Same packages as TOR -->
     <ItemGroup>
         <PackageReference Include="AmongUs.GameLibs.Steam" Version="2024.10.29" />
         <PackageReference Include="BepInEx.IL2CPP.MSBuild" Version="2.1.0-rc.1" />
@@ -17,7 +17,7 @@
         <PackageReference Include="Reactor" Version="2.3.1" />
     </ItemGroup>
 
-    <!-- TOR als Hard-Dependency referenzieren -->
+    <!-- Reference TOR as hard dependency -->
     <ItemGroup>
         <Reference Include="TheOtherRoles">
             <HintPath>..\TheOtherRoles-main\TheOtherRoles-main\TheOtherRoles\bin\Debug\net6.0\TheOtherRoles.dll</HintPath>
@@ -25,7 +25,7 @@
         </Reference>
     </ItemGroup>
 
-    <!-- Nach dem Build die DLL in den plugins-Ordner kopieren (falls AmongUsLatest gesetzt) -->
+    <!-- After build, copy the DLL into the plugins folder (if AmongUsLatest is set) -->
     <Target Name="CopyToBepInEx" AfterTargets="AfterBuild" Condition="Exists('$(AmongUsLatest)/BepInEx/plugins/')">
         <Copy SourceFiles="$(ProjectDir)\bin\$(Configuration)\net6.0\TOR-ChanceModifier.dll"
               DestinationFolder="$(AmongUsLatest)/BepInEx/plugins/" />
