@@ -1,3 +1,7 @@
+// TOR Chance Modifier - Copyright (C) 2026
+// Licensed under GPL-3.0-or-later. See LICENSE for details.
+// Based on The Other Roles (https://github.com/TheOtherRolesAU/TheOtherRoles), GPL-3.0.
+
 using System;
 using System.Collections.Generic;
 using System.Linq;

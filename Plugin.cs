@@ -1,3 +1,7 @@
+// TOR Chance Modifier - Copyright (C) 2026
+// Licensed under GPL-3.0-or-later. See LICENSE for details.
+// Based on The Other Roles (https://github.com/TheOtherRolesAU/TheOtherRoles), GPL-3.0.
+
 global using Il2CppInterop.Runtime;
 global using Il2CppInterop.Runtime.Attributes;
 global using Il2CppInterop.Runtime.InteropTypes;
