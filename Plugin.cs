@@ -1,4 +1,4 @@
-// TOR Chance Modifier - Copyright (C) 2026
+// TOR Chance Modifier - Copyright (C) 2026 DaUnknown-0
 // Licensed under GPL-3.0-or-later. See LICENSE for details.
 // Based on The Other Roles (https://github.com/TheOtherRolesAU/TheOtherRoles), GPL-3.0.
 
