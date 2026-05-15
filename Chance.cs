@@ -411,12 +411,12 @@ namespace TOR_ChanceModifier {
         // Other players only see the generic "Everything is random!" text.
         public static string GetChanceShortDescription(byte playerId) {
             if (PlayerControl.LocalPlayer == null || playerId != PlayerControl.LocalPlayer.PlayerId)
-                return "Everything is random!";
+                return "You are CHAOS!";
             if (!speedMod.TryGetValue(playerId, out float speed)
                 || !cooldownMod.TryGetValue(playerId, out float cd)
                 || !visionMod.TryGetValue(playerId, out float vis)
                 || !tasksMod.TryGetValue(playerId, out byte tasks))
-                return "Everything is random!";
+                return "You are CHAOS!";
 
             return $"Speed {speed:0.00}× | " +
                    $"Cooldown {cd:0.0}s | " +
@@ -520,7 +520,7 @@ namespace TOR_ChanceModifier {
                 __result.Add(new RoleInfo(
                     "Chance",
                     new Color32(255, 140, 0, byte.MaxValue),
-                    "Everything about you is random!",
+                    "You are CHAOS!",
                     Chance.GetChanceShortDescription(p.PlayerId),
                     (RoleId)Chance.RoleIdValue,
                     isNeutral: false, isModifier: true));
