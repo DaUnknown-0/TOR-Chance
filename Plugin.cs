@@ -16,11 +16,13 @@ using UnityEngine;
 using Types = TheOtherRoles.CustomOption.CustomOptionType;
 
 namespace TOR_ChanceModifier {
-    [BepInPlugin(Id, "TOR Chance Modifier", "1.0.0")]
+    [BepInPlugin(Id, "TOR Chance Modifier", VersionString)]
     [BepInDependency("me.eisbison.theotherroles")]
     [BepInProcess("Among Us.exe")]
     public class ChancePlugin : BasePlugin {
         public const string Id = "com.tormod.chancemodifier";
+        public const string VersionString = "1.0.0";
+        public static System.Version Version = System.Version.Parse(VersionString);
 
         internal static HarmonyLib.Harmony Harmony = new HarmonyLib.Harmony(Id);
 
@@ -92,6 +94,8 @@ namespace TOR_ChanceModifier {
                 30f, 0f, 600f, 5f, ChanceOptions.modifierChanceActivationUnit);
 
             Harmony.PatchAll(typeof(ChancePlugin).Assembly);
+
+            AddComponent<ChanceModUpdater>();
         }
     }
 }

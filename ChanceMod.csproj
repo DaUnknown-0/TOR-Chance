@@ -17,10 +17,15 @@
         <PackageReference Include="Reactor" Version="2.3.1" />
     </ItemGroup>
 
+    <!-- TOR DLL location: defaults to the local build, overridable in CI via -p:TheOtherRolesDll=... -->
+    <PropertyGroup>
+        <TheOtherRolesDll Condition="'$(TheOtherRolesDll)' == ''">..\TheOtherRoles-main\TheOtherRoles-main\TheOtherRoles\bin\Debug\net6.0\TheOtherRoles.dll</TheOtherRolesDll>
+    </PropertyGroup>
+
     <!-- Reference TOR as hard dependency -->
     <ItemGroup>
         <Reference Include="TheOtherRoles">
-            <HintPath>..\TheOtherRoles-main\TheOtherRoles-main\TheOtherRoles\bin\Debug\net6.0\TheOtherRoles.dll</HintPath>
+            <HintPath>$(TheOtherRolesDll)</HintPath>
             <Private>false</Private>
         </Reference>
     </ItemGroup>
