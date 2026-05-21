@@ -24,9 +24,12 @@ namespace TOR_ChanceModifier {
         public const string VersionString = "1.0.0";
         public static System.Version Version = System.Version.Parse(VersionString);
 
+        public static BepInEx.Logging.ManualLogSource Logger;
+
         internal static HarmonyLib.Harmony Harmony = new HarmonyLib.Harmony(Id);
 
         public override void Load() {
+            Logger = Log;
             // Create options here – TOR has already called CustomOptionHolder.Load()
             string[] rates     = CustomOptionHolder.rates;
             string[] quantities = CustomOptionHolder.ratesModifier;
@@ -100,6 +103,23 @@ namespace TOR_ChanceModifier {
             Harmony.PatchAll(typeof(ChancePlugin).Assembly);
 
             AddComponent<ChanceModUpdater>();
+        }
+    }
+
+    // Show the Chance Modifier version directly below the "TheOtherRoles vX" line in the
+    // top corner version display. Runs after TOR's own PingTracker postfix.
+    [HarmonyPatch(typeof(PingTracker), nameof(PingTracker.Update))]
+    [HarmonyPriority(Priority.Low)]
+    static class ChanceVersionDisplayPatch {
+        public static void Postfix(PingTracker __instance) {
+            if (__instance == null || __instance.text == null) return;
+            string text = __instance.text.text;
+            if (string.IsNullOrEmpty(text)) return;
+            string chanceLine = $"<color=#FF8C00>Chance Modifier</color> v{ChancePlugin.Version}";
+            int nl = text.IndexOf('\n');
+            __instance.text.text = nl >= 0
+                ? text.Substring(0, nl + 1) + chanceLine + "\n" + text.Substring(nl + 1)
+                : text + "\n" + chanceLine;
         }
     }
 }

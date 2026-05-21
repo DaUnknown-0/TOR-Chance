@@ -498,8 +498,11 @@ namespace TOR_ChanceModifier {
                 try {
                     byte pid = reader.ReadByte();
                     byte rid = reader.ReadByte();
+                    ChancePlugin.Logger?.LogInfo($"[Chaos] RPC received: player {pid} -> role {rid}");
                     ChaosMode.ApplyChaosReassign(pid, rid);
-                } catch { }
+                } catch (Exception e) {
+                    ChancePlugin.Logger?.LogError($"[Chaos] RPC apply failed: {e}");
+                }
                 return false;
             }
 

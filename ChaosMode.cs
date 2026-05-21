@@ -19,6 +19,11 @@ namespace TOR_ChanceModifier {
 
         private static bool processedThisMeeting;
 
+        // Per-player role progression for the end-of-game summary (Bug 4).
+        // Built inside ApplyChaosReassign, which runs on every client via the chaos RPC.
+        private static bool historyInitialized;
+        private static readonly Dictionary<byte, List<string>> roleHistory = new Dictionary<byte, List<string>>();
+
         private sealed class ChaosRole {
             public readonly RoleId Id;
             public readonly Func<CustomOption> Rate;
@@ -65,6 +70,8 @@ namespace TOR_ChanceModifier {
 
         public static void Reset() {
             processedThisMeeting = false;
+            historyInitialized = false;
+            roleHistory.Clear();
         }
 
         public static void OnMeetingStarted() {
@@ -99,6 +106,9 @@ namespace TOR_ChanceModifier {
             var crewPlayers = alive.Where(p => !p.Data.Role.IsImpostor
                                                && !Helpers.isNeutral(p)
                                                && p != Spy.spy && p != Snitch.snitch).ToList();
+
+            ChancePlugin.Logger?.LogInfo($"[Chaos] Reroll: {impPlayers.Count} impostors, {crewPlayers.Count} crew " +
+                $"(alive={alive.Count}, spy={(Spy.spy != null ? Spy.spy.PlayerId.ToString() : "-")}, snitch={(Snitch.snitch != null ? Snitch.snitch.PlayerId.ToString() : "-")})");
 
             RerollTeam(impPlayers, ImpostorRoles());
             RerollTeam(crewPlayers, CrewRoles());
@@ -157,6 +167,7 @@ namespace TOR_ChanceModifier {
         }
 
         private static void SendChaosReassign(byte playerId, byte roleId) {
+            ChancePlugin.Logger?.LogInfo($"[Chaos] Assign: player {playerId} -> role {(roleId == NoneRoleId ? "none/vanilla" : ((RoleId)roleId).ToString())}");
             MessageWriter w = AmongUsClient.Instance.StartRpcImmediately(
                 PlayerControl.LocalPlayer.NetId, Chance.ChaosRpcId, Hazel.SendOption.Reliable, -1);
             w.Write(playerId);
@@ -166,8 +177,39 @@ namespace TOR_ChanceModifier {
         }
 
         public static void ApplyChaosReassign(byte playerId, byte roleId) {
-            RPCProcedure.erasePlayerRoles(playerId); // keeps vanilla team + modifiers (ignoreModifier=true)
-            if (roleId != NoneRoleId) RPCProcedure.setRole(roleId, playerId);
+            try {
+                EnsureHistoryInitialized();
+                RPCProcedure.erasePlayerRoles(playerId); // keeps vanilla team + modifiers (ignoreModifier=true)
+                if (roleId != NoneRoleId) RPCProcedure.setRole(roleId, playerId);
+                RecordCurrentRole(playerId);
+            } catch (Exception e) {
+                ChancePlugin.Logger?.LogError($"[Chaos] ApplyChaosReassign failed for player {playerId}, role {roleId}: {e}");
+            }
+        }
+
+        // Snapshot every player's starting role the first time chaos touches anyone this game.
+        private static void EnsureHistoryInitialized() {
+            if (historyInitialized) return;
+            historyInitialized = true;
+            foreach (var p in PlayerControl.AllPlayerControls) {
+                if (p == null) continue;
+                roleHistory[p.PlayerId] = new List<string> { RoleInfo.GetRolesString(p, true, false) };
+            }
+        }
+
+        private static void RecordCurrentRole(byte playerId) {
+            var p = Helpers.playerById(playerId);
+            if (p == null) return;
+            string name = RoleInfo.GetRolesString(p, true, false);
+            if (!roleHistory.TryGetValue(playerId, out var list)) {
+                list = new List<string>();
+                roleHistory[playerId] = list;
+            }
+            if (list.Count == 0 || list[list.Count - 1] != name) list.Add(name);
+        }
+
+        public static List<string> GetHistory(byte playerId) {
+            return roleHistory.TryGetValue(playerId, out var list) ? list : null;
         }
     }
 
@@ -191,5 +233,19 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(TheOtherRoles.TheOtherRoles), "clearAndReloadRoles")]
     static class ChaosClearAndReloadPatch {
         public static void Postfix() => ChaosMode.Reset();
+    }
+
+    // Bug 4: at game end, show the full role progression (e.g. "Sheriff → Medic → Mayor")
+    // instead of only the final role. Only active once the game has ended, so in-game
+    // displays (nameplates, meetings) still show the current role.
+    [HarmonyPatch(typeof(RoleInfo), nameof(RoleInfo.GetRolesString))]
+    static class ChaosRoleHistoryPatch {
+        public static void Postfix(PlayerControl p, ref string __result) {
+            if (p == null || AmongUsClient.Instance == null) return;
+            if (AmongUsClient.Instance.GameState != InnerNet.InnerNetClient.GameStates.Ended) return;
+            var hist = ChaosMode.GetHistory(p.PlayerId);
+            if (hist == null || hist.Count <= 1) return;
+            __result = string.Join(" → ", hist.ToArray());
+        }
     }
 }
