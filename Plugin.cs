@@ -93,6 +93,10 @@ namespace TOR_ChanceModifier {
                 1124, Types.Modifier, "Activate After Seconds",
                 30f, 0f, 600f, 5f, ChanceOptions.modifierChanceActivationUnit);
 
+            ChanceOptions.chaosMode = new CustomOption(
+                1125, Types.Modifier, "Chaos Mode (reroll roles each meeting)",
+                new string[] { "Off", "On" }, "Off", null, true);
+
             Harmony.PatchAll(typeof(ChancePlugin).Assembly);
 
             AddComponent<ChanceModUpdater>();

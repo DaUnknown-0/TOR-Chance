@@ -34,6 +34,7 @@ namespace TOR_ChanceModifier {
         public static CustomOption modifierChanceActivationUnit;
         public static CustomOption modifierChanceActivationMeetings;
         public static CustomOption modifierChanceActivationSeconds;
+        public static CustomOption chaosMode;
     }
 
     // ---------------------------------------------------------------------------
@@ -41,6 +42,7 @@ namespace TOR_ChanceModifier {
     // ---------------------------------------------------------------------------
     public static class Chance {
         public const byte RpcId = 200;
+        public const byte ChaosRpcId = 201;
         internal const byte ActivationRpcId = 250;
         public const int RoleIdValue = 58;   // Value after Shifter (57)
 
@@ -490,6 +492,15 @@ namespace TOR_ChanceModifier {
                     Chance.applyValues(pid, speed, cooldown, vision, tasks);
                 } catch { }
                 return false;  // callId 200 is a Chance RPC
+            }
+
+            if (callId == Chance.ChaosRpcId) {
+                try {
+                    byte pid = reader.ReadByte();
+                    byte rid = reader.ReadByte();
+                    ChaosMode.ApplyChaosReassign(pid, rid);
+                } catch { }
+                return false;
             }
 
             if (callId == Chance.ActivationRpcId) {
