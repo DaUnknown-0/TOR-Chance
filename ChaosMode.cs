@@ -17,6 +17,11 @@ namespace TOR_ChanceModifier {
     public static class ChaosMode {
         private const byte NoneRoleId = 255; // marker: clear role, assign no new TOR role (vanilla)
 
+        // TOR's CustomRPC.SetRole value. The enum is internal to TOR so it can't be referenced by
+        // name; the value is stable. Used to push the new role through TOR's own RPC handler so it
+        // reaches EVERY TOR client (the path the Shifter uses), not just clients with this mod.
+        private const byte TorSetRoleRpcId = 104;
+
         private static bool processedThisMeeting;
 
         // Per-player role progression for the end-of-game summary (Bug 4).
@@ -89,6 +94,12 @@ namespace TOR_ChanceModifier {
             return ChanceOptions.chaosMode != null && ChanceOptions.chaosMode.getSelection() == 1;
         }
 
+        // Selection 1 == "Only roles already in play": redistribute existing roles instead of
+        // re-rolling new ones from the full enabled pool. Read host-side only (RerollRoles is host).
+        private static bool OnlyInPlayRoles() {
+            return ChanceOptions.chaosRolePool != null && ChanceOptions.chaosRolePool.getSelection() == 1;
+        }
+
         private static bool IsErased(PlayerControl p) {
             return Eraser.alreadyErased != null && Eraser.alreadyErased.Contains(p.PlayerId);
         }
@@ -117,62 +128,66 @@ namespace TOR_ChanceModifier {
         private static void RerollTeam(List<PlayerControl> players, List<ChaosRole> rolePool) {
             if (players.Count == 0) return;
 
-            // Drop 0% roles and roles whose current holder is dead (locked).
-            var available = rolePool.Where(r => {
-                var opt = r.Rate();
-                if (opt == null || opt.getSelection() <= 0) return false;
-                var holder = r.Holder();
-                if (holder != null && holder.Data != null && holder.Data.IsDead) return false;
-                return true;
-            }).ToList();
-
-            var ensured = available.Where(r => r.Rate().getSelection() >= 10).Select(r => r.Id)
-                                   .OrderBy(_ => rnd.Next()).ToList();
-            var tickets = new List<RoleId>();
-            foreach (var r in available) {
-                int sel = r.Rate().getSelection();
-                if (sel >= 1 && sel < 10) for (int i = 0; i < sel; i++) tickets.Add(r.Id);
-            }
-
             var shuffledPlayers = players.OrderBy(_ => rnd.Next()).ToList();
-            var assignedRoles = new HashSet<RoleId>();
             var result = new List<KeyValuePair<byte, byte>>();
             int idx = 0;
 
-            // Guaranteed (100%) roles first.
-            foreach (var roleId in ensured) {
-                if (idx >= shuffledPlayers.Count) break;
-                if (!assignedRoles.Add(roleId)) continue;
-                result.Add(new KeyValuePair<byte, byte>(shuffledPlayers[idx].PlayerId, (byte)roleId));
-                idx++;
-            }
+            if (OnlyInPlayRoles()) {
+                // "In play only" mode: redistribute just the roles currently held by a living
+                // player (already present this round) among the players. No new roles spawn — the
+                // set of roles stays the same, only their holders change (multi-way Shifter swap).
+                var inPlay = rolePool
+                    .Where(r => { var h = r.Holder(); return h != null && h.Data != null && !h.Data.IsDead; })
+                    .Select(r => r.Id)
+                    .OrderBy(_ => rnd.Next())
+                    .ToList();
+                foreach (var roleId in inPlay) {
+                    if (idx >= shuffledPlayers.Count) break;
+                    result.Add(new KeyValuePair<byte, byte>(shuffledPlayers[idx].PlayerId, (byte)roleId));
+                    idx++;
+                }
+            } else {
+                // "All roles" mode: weighted re-roll from every enabled role (new roles can appear,
+                // others vanish), drawn by spawn chance and kept unique while distinct roles last.
+                var available = rolePool.Where(r => {
+                    var opt = r.Rate();
+                    if (opt == null || opt.getSelection() <= 0) return false;
+                    var holder = r.Holder();
+                    if (holder != null && holder.Data != null && holder.Data.IsDead) return false; // locked to dead holder
+                    return true;
+                }).ToList();
 
-            // Weighted ticket pool for 1-9 chance roles, kept unique while distinct roles last.
-            while (idx < shuffledPlayers.Count && tickets.Count > 0) {
-                RoleId roleId = tickets[rnd.Next(tickets.Count)];
-                tickets.RemoveAll(x => x == roleId); // enforce uniqueness
-                if (!assignedRoles.Add(roleId)) continue;
-                result.Add(new KeyValuePair<byte, byte>(shuffledPlayers[idx].PlayerId, (byte)roleId));
-                idx++;
-            }
-
-            // Overflow: more living players than distinct enabled roles. Allow duplicate roles
-            // (weighted by spawn chance) so every eligible player still gets a real role and
-            // actually swaps, instead of silently falling back to vanilla.
-            if (idx < shuffledPlayers.Count && available.Count > 0) {
-                var weighted = new List<RoleId>();
+                var ensured = available.Where(r => r.Rate().getSelection() >= 10).Select(r => r.Id)
+                                       .OrderBy(_ => rnd.Next()).ToList();
+                var tickets = new List<RoleId>();
                 foreach (var r in available) {
                     int sel = r.Rate().getSelection();
-                    int weight = sel >= 10 ? 10 : sel; // 100% roles weighted highest, 0% already filtered out
-                    for (int i = 0; i < weight; i++) weighted.Add(r.Id);
+                    if (sel >= 1 && sel < 10) for (int i = 0; i < sel; i++) tickets.Add(r.Id);
                 }
-                for (; idx < shuffledPlayers.Count; idx++) {
-                    RoleId roleId = weighted[rnd.Next(weighted.Count)];
+
+                var assignedRoles = new HashSet<RoleId>();
+
+                // Guaranteed (100%) roles first.
+                foreach (var roleId in ensured) {
+                    if (idx >= shuffledPlayers.Count) break;
+                    if (!assignedRoles.Add(roleId)) continue;
                     result.Add(new KeyValuePair<byte, byte>(shuffledPlayers[idx].PlayerId, (byte)roleId));
+                    idx++;
+                }
+
+                // Weighted ticket pool for 1-9 chance roles, kept unique while distinct roles last.
+                while (idx < shuffledPlayers.Count && tickets.Count > 0) {
+                    RoleId roleId = tickets[rnd.Next(tickets.Count)];
+                    tickets.RemoveAll(x => x == roleId); // enforce uniqueness
+                    if (!assignedRoles.Add(roleId)) continue;
+                    result.Add(new KeyValuePair<byte, byte>(shuffledPlayers[idx].PlayerId, (byte)roleId));
+                    idx++;
                 }
             }
 
-            // Only reachable when no role is enabled at all: keep remaining players vanilla.
+            // TOR roles are singletons (one static holder field each), so a role can only be held
+            // by ONE player. Any remaining players stay vanilla — duplicating a role would just
+            // blank out whoever was assigned it first.
             for (; idx < shuffledPlayers.Count; idx++) {
                 result.Add(new KeyValuePair<byte, byte>(shuffledPlayers[idx].PlayerId, NoneRoleId));
             }
@@ -184,12 +199,26 @@ namespace TOR_ChanceModifier {
 
         private static void SendChaosReassign(byte playerId, byte roleId) {
             ChancePlugin.Logger?.LogInfo($"[Chaos] Assign: player {playerId} -> role {(roleId == NoneRoleId ? "none/vanilla" : ((RoleId)roleId).ToString())}");
+
+            // Custom RPC (Chance-mod clients): clears the player's previous role + tracks history.
             MessageWriter w = AmongUsClient.Instance.StartRpcImmediately(
                 PlayerControl.LocalPlayer.NetId, Chance.ChaosRpcId, Hazel.SendOption.Reliable, -1);
             w.Write(playerId);
             w.Write(roleId);
             AmongUsClient.Instance.FinishRpcImmediately(w);
-            ApplyChaosReassign(playerId, roleId);
+
+            // Native TOR SetRole RPC: pushes the new role through TOR's own handler so EVERY TOR
+            // client applies it (the path the Shifter uses) — this is what makes ghosts on any
+            // client see the swap. Sent after the erase RPC, so the per-client order is erase→set.
+            if (roleId != NoneRoleId) {
+                MessageWriter sr = AmongUsClient.Instance.StartRpcImmediately(
+                    PlayerControl.LocalPlayer.NetId, TorSetRoleRpcId, Hazel.SendOption.Reliable, -1);
+                sr.Write(roleId);
+                sr.Write(playerId);
+                AmongUsClient.Instance.FinishRpcImmediately(sr);
+            }
+
+            ApplyChaosReassign(playerId, roleId); // host applies locally (erase + set + history)
         }
 
         public static void ApplyChaosReassign(byte playerId, byte roleId) {

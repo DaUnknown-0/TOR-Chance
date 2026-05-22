@@ -104,6 +104,11 @@ namespace TOR_ChanceModifier {
                 1125, Types.Modifier, "Chaos Mode (reroll roles each meeting)",
                 new string[] { "Off", "On" }, "Off", null, true);
 
+            ChanceOptions.chaosRolePool = new CustomOption(
+                1127, Types.Modifier, "Chaos: Role Pool",
+                new string[] { "All enabled roles", "Only roles already in play" }, "All enabled roles",
+                ChanceOptions.chaosMode, false);
+
             Harmony.PatchAll(typeof(ChancePlugin).Assembly);
 
             AddComponent<ChanceModUpdater>();

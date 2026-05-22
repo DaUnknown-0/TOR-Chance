@@ -36,6 +36,7 @@ namespace TOR_ChanceModifier {
         public static CustomOption modifierChanceActivationMeetings;
         public static CustomOption modifierChanceActivationSeconds;
         public static CustomOption chaosMode;
+        public static CustomOption chaosRolePool;
     }
 
     // ---------------------------------------------------------------------------
