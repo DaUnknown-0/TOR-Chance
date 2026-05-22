@@ -147,7 +147,7 @@ namespace TOR_ChanceModifier {
                 idx++;
             }
 
-            // Weighted ticket pool for 1-9 chance roles.
+            // Weighted ticket pool for 1-9 chance roles, kept unique while distinct roles last.
             while (idx < shuffledPlayers.Count && tickets.Count > 0) {
                 RoleId roleId = tickets[rnd.Next(tickets.Count)];
                 tickets.RemoveAll(x => x == roleId); // enforce uniqueness
@@ -156,7 +156,23 @@ namespace TOR_ChanceModifier {
                 idx++;
             }
 
-            // Remaining players become vanilla (role cleared, none assigned).
+            // Overflow: more living players than distinct enabled roles. Allow duplicate roles
+            // (weighted by spawn chance) so every eligible player still gets a real role and
+            // actually swaps, instead of silently falling back to vanilla.
+            if (idx < shuffledPlayers.Count && available.Count > 0) {
+                var weighted = new List<RoleId>();
+                foreach (var r in available) {
+                    int sel = r.Rate().getSelection();
+                    int weight = sel >= 10 ? 10 : sel; // 100% roles weighted highest, 0% already filtered out
+                    for (int i = 0; i < weight; i++) weighted.Add(r.Id);
+                }
+                for (; idx < shuffledPlayers.Count; idx++) {
+                    RoleId roleId = weighted[rnd.Next(weighted.Count)];
+                    result.Add(new KeyValuePair<byte, byte>(shuffledPlayers[idx].PlayerId, (byte)roleId));
+                }
+            }
+
+            // Only reachable when no role is enabled at all: keep remaining players vanilla.
             for (; idx < shuffledPlayers.Count; idx++) {
                 result.Add(new KeyValuePair<byte, byte>(shuffledPlayers[idx].PlayerId, NoneRoleId));
             }
@@ -177,13 +193,21 @@ namespace TOR_ChanceModifier {
         }
 
         public static void ApplyChaosReassign(byte playerId, byte roleId) {
+            // The actual role change must always run on every client (this is what ghosts read
+            // live for the role label), so it gets its own try-catch and runs FIRST. The
+            // end-of-game history is best-effort and must never be able to block the reassignment.
             try {
-                EnsureHistoryInitialized();
                 RPCProcedure.erasePlayerRoles(playerId); // keeps vanilla team + modifiers (ignoreModifier=true)
                 if (roleId != NoneRoleId) RPCProcedure.setRole(roleId, playerId);
-                RecordCurrentRole(playerId);
             } catch (Exception e) {
                 ChancePlugin.Logger?.LogError($"[Chaos] ApplyChaosReassign failed for player {playerId}, role {roleId}: {e}");
+            }
+
+            try {
+                EnsureHistoryInitialized();
+                RecordCurrentRole(playerId);
+            } catch (Exception e) {
+                ChancePlugin.Logger?.LogError($"[Chaos] role-history update failed for player {playerId}: {e}");
             }
         }
 
@@ -192,7 +216,7 @@ namespace TOR_ChanceModifier {
             if (historyInitialized) return;
             historyInitialized = true;
             foreach (var p in PlayerControl.AllPlayerControls) {
-                if (p == null) continue;
+                if (p == null || p.Data == null || p.Data.Role == null) continue;
                 roleHistory[p.PlayerId] = new List<string> { RoleInfo.GetRolesString(p, true, false) };
             }
         }
