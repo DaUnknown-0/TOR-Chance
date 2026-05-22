@@ -28,6 +28,7 @@ namespace TOR_ChanceModifier {
         public static CustomOption modifierChanceTasksMin;
         public static CustomOption modifierChanceTasksMax;
         public static CustomOption modifierChanceKillDeathChance;
+        public static CustomOption modifierChanceReportChance;
         public static CustomOption modifierChanceVisionMin;
         public static CustomOption modifierChanceVisionMax;
         public static CustomOption modifierChanceActivationMode;
@@ -56,6 +57,7 @@ namespace TOR_ChanceModifier {
         public static float cooldownMin, cooldownMax;
         public static int   tasksMin, tasksMax;
         public static float killDeathChance;
+        public static float reportChance;
         public static float visionMin, visionMax;
 
         private static int activationMode;
@@ -69,6 +71,7 @@ namespace TOR_ChanceModifier {
         private static bool isActive;
         private static bool activationSoundPlayed;
         private static AudioClip activationSoundClip;
+        private static float reportCheckTimer;
 
         public static void clearAndReload() {
             chanceList   = new List<PlayerControl>();
@@ -84,6 +87,7 @@ namespace TOR_ChanceModifier {
             tasksMin        = (int)(ChanceOptions.modifierChanceTasksMin?.getFloat()  ?? 1f);
             tasksMax        = (int)(ChanceOptions.modifierChanceTasksMax?.getFloat()  ?? 10f);
             killDeathChance = ChanceOptions.modifierChanceKillDeathChance?.getFloat() ?? 30f;
+            reportChance    = ChanceOptions.modifierChanceReportChance?.getFloat()    ?? 10f;
             visionMin       = ChanceOptions.modifierChanceVisionMin?.getFloat()       ?? 0.25f;
             visionMax       = ChanceOptions.modifierChanceVisionMax?.getFloat()       ?? 5f;
 
@@ -118,6 +122,7 @@ namespace TOR_ChanceModifier {
             rangeSyncInProgress = false;
             activationSoundPlayed = false;
             isActive = false;
+            reportCheckTimer = 0f;
         }
 
         private static bool HasChanceModifier() {
@@ -429,6 +434,49 @@ namespace TOR_ChanceModifier {
                    $"Vision {vis:0.00}× | " +
                    $"Tasks {tasks}";
         }
+
+        // Auto-report: once per second, if a body is within report range of the local Chance
+        // player, there is a `reportChance`% chance they panic-report it. Driven per client for
+        // the local player (CmdReportDeadBody is a client command), so each player rolls their own.
+        public static void UpdateAutoReport(float deltaTime) {
+            if (!IsActive() || reportChance <= 0f) return;
+            if (AmongUsClient.Instance?.GameState != InnerNet.InnerNetClient.GameStates.Started) return;
+
+            var lp = PlayerControl.LocalPlayer;
+            if (lp == null || lp.Data == null || lp.Data.IsDead) return;
+            if (!IsChancePlayer(lp.PlayerId)) return;
+
+            reportCheckTimer += deltaTime;
+            if (reportCheckTimer < 1f) return;
+            reportCheckTimer = 0f;
+
+            // Not while a meeting / exile cutscene is up, or while otherwise unable to act.
+            if (MeetingHud.Instance != null || ExileController.Instance != null) return;
+            if (!lp.CanMove) return;
+
+            DeadBody body = FindReportableBody(lp);
+            if (body == null) return;
+
+            if (rnd.NextDouble() * 100f < reportChance) {
+                NetworkedPlayerInfo info = GameData.Instance.GetPlayerById(body.ParentId);
+                if (info != null) lp.CmdReportDeadBody(info);
+            }
+        }
+
+        private static DeadBody FindReportableBody(PlayerControl lp) {
+            Vector2 origin = lp.GetTruePosition();
+            foreach (Collider2D collider in Physics2D.OverlapCircleAll(origin, lp.MaxReportDistance, Constants.PlayersOnlyMask)) {
+                if (collider.tag != "DeadBody") continue;
+                DeadBody body = collider.GetComponent<DeadBody>();
+                if (body == null || !body.enabled || body.Reported) continue;
+                Vector2 bodyPos = body.TruePosition;
+                if (Vector2.Distance(bodyPos, origin) <= lp.MaxReportDistance
+                    && !PhysicsHelpers.AnythingBetween(origin, bodyPos, Constants.ShipAndObjectsMask, false)) {
+                    return body;
+                }
+            }
+            return null;
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -458,6 +506,14 @@ namespace TOR_ChanceModifier {
             if (AmongUsClient.Instance.GameState != InnerNet.InnerNetClient.GameStates.Started) return;
             if (Chance.IsActive()) return;
             Chance.TryActivate();
+        }
+    }
+
+    // Runs on every client (not host-only): each client rolls auto-report for its own local player.
+    [HarmonyPatch(typeof(HudManager), nameof(HudManager.Update))]
+    static class ChanceAutoReportTickPatch {
+        public static void Postfix() {
+            Chance.UpdateAutoReport(Time.deltaTime);
         }
     }
 

@@ -72,6 +72,10 @@ namespace TOR_ChanceModifier {
                 1118, Types.Modifier, "Kill Success Chance % (V7)",
                 30f, 0f, 100f, 5f, ChanceOptions.modifierChance);
 
+            ChanceOptions.modifierChanceReportChance = CustomOption.Create(
+                1126, Types.Modifier, "Auto-Report Chance % (per second)",
+                10f, 0f, 100f, 5f, ChanceOptions.modifierChance);
+
             ChanceOptions.modifierChanceVisionMin = CustomOption.Create(
                 1119, Types.Modifier, "Min Vision",
                 0.25f, 0.25f, 5f, 0.25f, ChanceOptions.modifierChance, false, Chance.OnVisionMinChanged);
