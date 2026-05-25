@@ -48,6 +48,9 @@ namespace TOR_ChanceModifier {
         public const byte ChaosRpcId = 201;
         internal const byte ActivationRpcId = 250;
         internal const byte VersionHandshakeRpcId = 251;
+        // Sentinel task value meaning "do not manage this player's task count" — used when task
+        // reduction is disabled (delayed activation, where tasks are already assigned at game start).
+        internal const byte NoTaskChange = byte.MaxValue;
         public const int RoleIdValue = 58;   // Value after Shifter (57)
 
         public static List<PlayerControl> chanceList = new List<PlayerControl>();
@@ -62,6 +65,7 @@ namespace TOR_ChanceModifier {
         public static float killDeathChance;
         public static float reportChance;
         public static float visionMin, visionMax;
+        private static bool tasksEnabled;
 
         private static int activationMode;
         private static int activationUnit;
@@ -126,6 +130,10 @@ namespace TOR_ChanceModifier {
             activationUnit    = ChanceOptions.modifierChanceActivationUnit?.getSelection()   ?? 0;
             activationMeetings = (int)(ChanceOptions.modifierChanceActivationMeetings?.getFloat() ?? 0f);
             activationSeconds  = ChanceOptions.modifierChanceActivationSeconds?.getFloat()   ?? 0f;
+
+            // Task reduction only works for immediate activation: a delayed Chance can't trim tasks
+            // that were already assigned at game start. Disable the task feature entirely when delayed.
+            tasksEnabled = activationMode == 0;
 
             meetingsElapsed = 0;
             activationStartTime = -1f;
@@ -330,7 +338,9 @@ namespace TOR_ChanceModifier {
             float cooldown = orderedCooldownMin + (float)rnd.NextDouble() * (orderedCooldownMax - orderedCooldownMin);
             float vision   = orderedVisionMin   + (float)rnd.NextDouble() * (orderedVisionMax   - orderedVisionMin);
             byte  tasks;
-            if (!randomizeTasks && tasksMod.TryGetValue(player.PlayerId, out byte existingTasks)) {
+            if (!tasksEnabled) {
+                tasks = NoTaskChange;
+            } else if (!randomizeTasks && tasksMod.TryGetValue(player.PlayerId, out byte existingTasks)) {
                 tasks = existingTasks;
             } else {
                 tasks = (byte)rnd.Next(orderedTasksMin, orderedTasksMax + 1);
@@ -440,10 +450,11 @@ namespace TOR_ChanceModifier {
                 || !tasksMod.TryGetValue(playerId, out byte tasks))
                 return "You are CHAOS!";
 
-            return $"Speed {speed:0.00}× | " +
-                   $"Cooldown {cd:0.0}s | " +
-                   $"Vision {vis:0.00}× | " +
-                   $"Tasks {tasks}";
+            string description = $"Speed {speed:0.00}× | " +
+                                 $"Cooldown {cd:0.0}s | " +
+                                 $"Vision {vis:0.00}×";
+            if (tasks != NoTaskChange) description += $" | Tasks {tasks}";
+            return description;
         }
 
         // Auto-report: once per second, if a body is within report range of the local Chance
@@ -642,6 +653,7 @@ namespace TOR_ChanceModifier {
             foreach (var p in Chance.chanceList) {
                 if (p?.Data?.Tasks == null) continue;
                 if (!Chance.tasksMod.TryGetValue(p.PlayerId, out byte target)) continue;
+                if (target == Chance.NoTaskChange) continue; // task reduction disabled (delayed activation)
                 if (p.Data.Tasks.Count <= target) continue;
 
                 // Keep the first `target` already-assigned tasks and re-set the player's task list

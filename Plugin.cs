@@ -88,6 +88,14 @@ namespace TOR_ChanceModifier {
                 1121, Types.Modifier, "Activation Delay Mode",
                 new string[] { "Immediate", "Delayed" }, "Delayed", ChanceOptions.modifierChance, false);
 
+            // Tasks can only be trimmed at game start, so the task options are meaningless for a
+            // delayed Chance. Re-parent them under the activation mode with invertedParent, which
+            // shows a child only when the parent's selection is 0 ("Immediate").
+            ChanceOptions.modifierChanceTasksMin.parent = ChanceOptions.modifierChanceActivationMode;
+            ChanceOptions.modifierChanceTasksMin.invertedParent = true;
+            ChanceOptions.modifierChanceTasksMax.parent = ChanceOptions.modifierChanceActivationMode;
+            ChanceOptions.modifierChanceTasksMax.invertedParent = true;
+
             ChanceOptions.modifierChanceActivationUnit = new CustomOption(
                 1122, Types.Modifier, "Activation Delay Unit",
                 new string[] { "Meetings", "Seconds" }, "Meetings", ChanceOptions.modifierChanceActivationMode, false);
