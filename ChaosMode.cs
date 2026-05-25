@@ -108,6 +108,15 @@ namespace TOR_ChanceModifier {
             if (!(AmongUsClient.Instance?.AmHost ?? false)) return;
             if (!IsEnabled()) return;
 
+            // Reassigning a role runs RPCProcedure.erasePlayerRoles, which calls Eraser.clearAndReload()
+            // when the reassigned player IS the eraser — and that wipes Eraser.alreadyErased. Since the
+            // eraser (an impostor) gets rerolled like everyone else, the record of who was erased would
+            // be lost, so previously erased players would be re-rolled into a new role next meeting.
+            // Snapshot the erased set now and restore it after the reroll.
+            var erasedSnapshot = Eraser.alreadyErased != null
+                ? new List<byte>(Eraser.alreadyErased)
+                : new List<byte>();
+
             var alive = PlayerControl.AllPlayerControls.ToArray()
                 .Where(p => p != null && p.Data != null && !p.Data.Disconnected && !p.Data.IsDead && p.Data.Role != null)
                 .Where(p => !IsErased(p)) // players the Eraser caught keep no role
@@ -128,6 +137,12 @@ namespace TOR_ChanceModifier {
 
             RerollTeam(impPlayers, ImpostorRoles());
             RerollTeam(crewPlayers, CrewRoles());
+
+            // Restore the erased record in case a reassigned eraser cleared it (see snapshot above),
+            // so erased players stay excluded from every future reroll.
+            if (Eraser.alreadyErased == null) Eraser.alreadyErased = new List<byte>();
+            foreach (var id in erasedSnapshot)
+                if (!Eraser.alreadyErased.Contains(id)) Eraser.alreadyErased.Add(id);
         }
 
         private static void RerollTeam(List<PlayerControl> players, List<ChaosRole> rolePool) {

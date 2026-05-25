@@ -47,6 +47,7 @@ namespace TOR_ChanceModifier {
         public const byte RpcId = 200;
         public const byte ChaosRpcId = 201;
         internal const byte ActivationRpcId = 250;
+        internal const byte VersionHandshakeRpcId = 251;
         public const int RoleIdValue = 58;   // Value after Shifter (57)
 
         public static List<PlayerControl> chanceList = new List<PlayerControl>();
@@ -574,6 +575,11 @@ namespace TOR_ChanceModifier {
 
             if (callId == Chance.ActivationRpcId) {
                 Chance.ReceiveActivation();
+                return false;
+            }
+
+            if (callId == Chance.VersionHandshakeRpcId) {
+                try { ChanceVersionHandshake.ReceiveRpc(reader); } catch { }
                 return false;
             }
 
