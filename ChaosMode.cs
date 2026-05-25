@@ -113,6 +113,11 @@ namespace TOR_ChanceModifier {
                 .Where(p => !IsErased(p)) // players the Eraser caught keep no role
                 .ToList();
 
+            // "Only Chance players" scope: restrict the reroll to players carrying the Chance
+            // modifier. With the Chance modifier off/inactive nobody qualifies, so nothing rerolls.
+            if (ChanceOptions.chaosScope != null && ChanceOptions.chaosScope.getSelection() == 1)
+                alive = alive.Where(p => Chance.IsChancePlayer(p.PlayerId)).ToList();
+
             var impPlayers = alive.Where(p => p.Data.Role.IsImpostor).ToList();
             var crewPlayers = alive.Where(p => !p.Data.Role.IsImpostor
                                                && !Helpers.isNeutral(p)

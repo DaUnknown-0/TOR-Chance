@@ -37,6 +37,7 @@ namespace TOR_ChanceModifier {
         public static CustomOption modifierChanceActivationSeconds;
         public static CustomOption chaosMode;
         public static CustomOption chaosRolePool;
+        public static CustomOption chaosScope;
     }
 
     // ---------------------------------------------------------------------------
@@ -106,6 +107,14 @@ namespace TOR_ChanceModifier {
             int origTasksMax = tasksMax;
             tasksMin = Math.Min(origTasksMin, origTasksMax);
             tasksMax = Math.Max(origTasksMin, origTasksMax);
+
+            // A Chance player can never get more tasks than the game actually hands out.
+            var taskOptions = GameOptionsManager.Instance?.currentNormalGameOptions;
+            if (taskOptions != null) {
+                int totalGameTasks = taskOptions.NumCommonTasks + taskOptions.NumShortTasks + taskOptions.NumLongTasks;
+                if (totalGameTasks > 0) tasksMax = Math.Min(tasksMax, totalGameTasks);
+            }
+            tasksMin = Math.Min(tasksMin, tasksMax);
 
             float origVisionMin = visionMin;
             float origVisionMax = visionMax;
@@ -627,8 +636,17 @@ namespace TOR_ChanceModifier {
             foreach (var p in Chance.chanceList) {
                 if (p?.Data?.Tasks == null) continue;
                 if (!Chance.tasksMod.TryGetValue(p.PlayerId, out byte target)) continue;
-                while (p.Data.Tasks.Count > target)
-                    p.Data.Tasks.RemoveAt(p.Data.Tasks.Count - 1);
+                if (p.Data.Tasks.Count <= target) continue;
+
+                // Keep the first `target` already-assigned tasks and re-set the player's task list
+                // through the canonical RpcSetTasks path. This rebuilds Data.Tasks AND myTasks on
+                // every client, so the dropped tasks vanish from the HUD, the map, and can no longer
+                // be completed — unlike a bare Data.Tasks.RemoveAt, which leaves the PlayerTask
+                // GameObjects (and thus the HUD/map entries and usable consoles) in place.
+                var keep = new List<byte>();
+                for (int i = 0; i < p.Data.Tasks.Count && keep.Count < target; i++)
+                    keep.Add((byte)p.Data.Tasks[i].TypeId);
+                p.Data.RpcSetTasks(new Il2CppStructArray<byte>(keep.ToArray()));
             }
         }
     }

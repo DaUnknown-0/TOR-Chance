@@ -109,6 +109,11 @@ namespace TOR_ChanceModifier {
                 new string[] { "All enabled roles", "Only roles already in play" }, "All enabled roles",
                 ChanceOptions.chaosMode, false);
 
+            ChanceOptions.chaosScope = new CustomOption(
+                1128, Types.Modifier, "Chaos: Affected Players",
+                new string[] { "All players", "Only Chance players" }, "All players",
+                ChanceOptions.chaosMode, false);
+
             Harmony.PatchAll(typeof(ChancePlugin).Assembly);
 
             AddComponent<ChanceModUpdater>();
