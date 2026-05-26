@@ -21,7 +21,7 @@ namespace TOR_ChanceModifier {
     [BepInProcess("Among Us.exe")]
     public class ChancePlugin : BasePlugin {
         public const string Id = "com.tormod.chancemodifier";
-        public const string VersionString = "1.0.12";
+        public const string VersionString = "1.0.13";
         public static System.Version Version = System.Version.Parse(VersionString);
 
         public static BepInEx.Logging.ManualLogSource Logger;
