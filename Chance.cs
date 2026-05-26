@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using HarmonyLib;
 using Hazel;
 using UnityEngine;
@@ -31,6 +32,13 @@ namespace TOR_ChanceModifier {
         public static CustomOption modifierChanceReportChance;
         public static CustomOption modifierChanceVisionMin;
         public static CustomOption modifierChanceVisionMax;
+        public static CustomOption modifierChanceVentChance;
+        public static CustomOption modifierChanceVoteMultMin;
+        public static CustomOption modifierChanceVoteMultMax;
+        public static CustomOption modifierChanceKillDistanceMin;
+        public static CustomOption modifierChanceKillDistanceMax;
+        public static CustomOption modifierChanceSabotageCdMin;
+        public static CustomOption modifierChanceSabotageCdMax;
         public static CustomOption modifierChanceActivationMode;
         public static CustomOption modifierChanceActivationUnit;
         public static CustomOption modifierChanceActivationMeetings;
@@ -54,10 +62,14 @@ namespace TOR_ChanceModifier {
         public const int RoleIdValue = 58;   // Value after Shifter (57)
 
         public static List<PlayerControl> chanceList = new List<PlayerControl>();
-        public static Dictionary<byte, float> speedMod    = new Dictionary<byte, float>();
-        public static Dictionary<byte, float> cooldownMod = new Dictionary<byte, float>();
-        public static Dictionary<byte, float> visionMod   = new Dictionary<byte, float>();
-        public static Dictionary<byte, byte>  tasksMod    = new Dictionary<byte, byte>();
+        public static Dictionary<byte, float> speedMod        = new Dictionary<byte, float>();
+        public static Dictionary<byte, float> cooldownMod     = new Dictionary<byte, float>();
+        public static Dictionary<byte, float> visionMod       = new Dictionary<byte, float>();
+        public static Dictionary<byte, byte>  tasksMod        = new Dictionary<byte, byte>();
+        public static Dictionary<byte, float> sabotageCdMod   = new Dictionary<byte, float>();
+        public static Dictionary<byte, float> killDistanceMod = new Dictionary<byte, float>();
+        public static Dictionary<byte, byte>  voteMultiplierMod = new Dictionary<byte, byte>();
+        public static Dictionary<byte, bool>  ventAccessMod   = new Dictionary<byte, bool>();
 
         public static float speedMin, speedMax;
         public static float cooldownMin, cooldownMax;
@@ -65,6 +77,10 @@ namespace TOR_ChanceModifier {
         public static float killDeathChance;
         public static float reportChance;
         public static float visionMin, visionMax;
+        public static float ventChance;
+        public static int   voteMultMin, voteMultMax;
+        public static float killDistanceMin, killDistanceMax;
+        public static float sabotageCdMin, sabotageCdMax;
         private static bool tasksEnabled;
 
         private static int activationMode;
@@ -86,7 +102,26 @@ namespace TOR_ChanceModifier {
             cooldownMod  = new Dictionary<byte, float>();
             visionMod    = new Dictionary<byte, float>();
             tasksMod     = new Dictionary<byte, byte>();
+            sabotageCdMod   = new Dictionary<byte, float>();
+            killDistanceMod = new Dictionary<byte, float>();
+            voteMultiplierMod = new Dictionary<byte, byte>();
+            ventAccessMod   = new Dictionary<byte, bool>();
 
+            ReloadRanges();
+
+            meetingsElapsed = 0;
+            activationStartTime = -1f;
+            meetingEndedThisMeeting = false;
+            rangeSyncInProgress = false;
+            activationSoundPlayed = false;
+            isActive = false;
+            reportCheckTimer = 0f;
+        }
+
+        // Loads every min/max range, chance % and activation setting from the options and applies
+        // the min≤max ordering + task cap. No runtime/dictionary state is touched, so it is safe to
+        // call outside a game (the preview panel uses it to roll sample values from live options).
+        public static void ReloadRanges() {
             speedMin        = ChanceOptions.modifierChanceSpeedMin?.getFloat()        ?? 0.5f;
             speedMax        = ChanceOptions.modifierChanceSpeedMax?.getFloat()        ?? 2.5f;
             cooldownMin     = ChanceOptions.modifierChanceCooldownMin?.getFloat()     ?? 5f;
@@ -97,6 +132,13 @@ namespace TOR_ChanceModifier {
             reportChance    = ChanceOptions.modifierChanceReportChance?.getFloat()    ?? 10f;
             visionMin       = ChanceOptions.modifierChanceVisionMin?.getFloat()       ?? 0.25f;
             visionMax       = ChanceOptions.modifierChanceVisionMax?.getFloat()       ?? 5f;
+            ventChance      = ChanceOptions.modifierChanceVentChance?.getFloat()      ?? 0f;
+            voteMultMin     = (int)(ChanceOptions.modifierChanceVoteMultMin?.getFloat() ?? 1f);
+            voteMultMax     = (int)(ChanceOptions.modifierChanceVoteMultMax?.getFloat() ?? 1f);
+            killDistanceMin = ChanceOptions.modifierChanceKillDistanceMin?.getFloat() ?? 1f;
+            killDistanceMax = ChanceOptions.modifierChanceKillDistanceMax?.getFloat() ?? 1.75f;
+            sabotageCdMin   = ChanceOptions.modifierChanceSabotageCdMin?.getFloat()   ?? 5f;
+            sabotageCdMax   = ChanceOptions.modifierChanceSabotageCdMax?.getFloat()   ?? 30f;
 
             float origSpeedMin = speedMin;
             float origSpeedMax = speedMax;
@@ -126,6 +168,21 @@ namespace TOR_ChanceModifier {
             visionMin = Mathf.Min(origVisionMin, origVisionMax);
             visionMax = Mathf.Max(origVisionMin, origVisionMax);
 
+            int origVoteMin = voteMultMin;
+            int origVoteMax = voteMultMax;
+            voteMultMin = Math.Min(origVoteMin, origVoteMax);
+            voteMultMax = Math.Max(origVoteMin, origVoteMax);
+
+            float origKillDistMin = killDistanceMin;
+            float origKillDistMax = killDistanceMax;
+            killDistanceMin = Mathf.Min(origKillDistMin, origKillDistMax);
+            killDistanceMax = Mathf.Max(origKillDistMin, origKillDistMax);
+
+            float origSaboMin = sabotageCdMin;
+            float origSaboMax = sabotageCdMax;
+            sabotageCdMin = Mathf.Min(origSaboMin, origSaboMax);
+            sabotageCdMax = Mathf.Max(origSaboMin, origSaboMax);
+
             activationMode    = ChanceOptions.modifierChanceActivationMode?.getSelection()   ?? 0;
             activationUnit    = ChanceOptions.modifierChanceActivationUnit?.getSelection()   ?? 0;
             activationMeetings = (int)(ChanceOptions.modifierChanceActivationMeetings?.getFloat() ?? 0f);
@@ -134,14 +191,6 @@ namespace TOR_ChanceModifier {
             // Task reduction only works for immediate activation: a delayed Chance can't trim tasks
             // that were already assigned at game start. Disable the task feature entirely when delayed.
             tasksEnabled = activationMode == 0;
-
-            meetingsElapsed = 0;
-            activationStartTime = -1f;
-            meetingEndedThisMeeting = false;
-            rangeSyncInProgress = false;
-            activationSoundPlayed = false;
-            isActive = false;
-            reportCheckTimer = 0f;
         }
 
         private static bool HasChanceModifier() {
@@ -320,11 +369,22 @@ namespace TOR_ChanceModifier {
             }
         }
 
-        // Sends RPC 200 from host → sets values on all clients
-        // Format: playerId (byte), speed (float), cooldown (float), vision (float), tasks (byte)
-        // Tasks are only re-rolled when randomizeTasks=true (initial assignment);
-        // re-randomization between meetings keeps the original task count.
-        public static void sendSetValues(PlayerControl player, System.Random rnd, bool randomizeTasks = true) {
+        // One randomized stat set for a Chance player (or a sample roll for the preview panel).
+        public struct ChanceRoll {
+            public float speed;
+            public float cooldown;
+            public float vision;
+            public byte  tasks;          // NoTaskChange when task reduction is disabled
+            public float sabotageCd;
+            public float killDistance;
+            public byte  voteMultiplier; // 0..3
+            public bool  ventAccess;
+        }
+
+        // Rolls one stat set from the configured ranges. No side effects — used by both the live
+        // assignment (sendSetValues) and the read-only preview panel. `playerId` is only consulted
+        // when randomizeTasks=false to keep an already-assigned task count stable.
+        public static ChanceRoll RollValues(System.Random rnd, bool randomizeTasks = true, byte playerId = byte.MaxValue) {
             float orderedSpeedMin = Mathf.Min(speedMin, speedMax);
             float orderedSpeedMax = Mathf.Max(speedMin, speedMax);
             float orderedCooldownMin = Mathf.Min(cooldownMin, cooldownMax);
@@ -333,38 +393,88 @@ namespace TOR_ChanceModifier {
             float orderedVisionMax = Mathf.Max(visionMin, visionMax);
             int orderedTasksMin = Math.Min(tasksMin, tasksMax);
             int orderedTasksMax = Math.Max(tasksMin, tasksMax);
+            int orderedVoteMin = Math.Min(voteMultMin, voteMultMax);
+            int orderedVoteMax = Math.Max(voteMultMin, voteMultMax);
+            float orderedKillDistMin = Mathf.Min(killDistanceMin, killDistanceMax);
+            float orderedKillDistMax = Mathf.Max(killDistanceMin, killDistanceMax);
+            float orderedSaboMin = Mathf.Min(sabotageCdMin, sabotageCdMax);
+            float orderedSaboMax = Mathf.Max(sabotageCdMin, sabotageCdMax);
 
-            float speed    = orderedSpeedMin    + (float)rnd.NextDouble() * (orderedSpeedMax    - orderedSpeedMin);
-            float cooldown = orderedCooldownMin + (float)rnd.NextDouble() * (orderedCooldownMax - orderedCooldownMin);
-            float vision   = orderedVisionMin   + (float)rnd.NextDouble() * (orderedVisionMax   - orderedVisionMin);
-            byte  tasks;
+            ChanceRoll roll = new ChanceRoll();
+            roll.speed        = orderedSpeedMin    + (float)rnd.NextDouble() * (orderedSpeedMax    - orderedSpeedMin);
+            roll.cooldown     = orderedCooldownMin + (float)rnd.NextDouble() * (orderedCooldownMax - orderedCooldownMin);
+            roll.vision       = orderedVisionMin   + (float)rnd.NextDouble() * (orderedVisionMax   - orderedVisionMin);
+            roll.sabotageCd   = orderedSaboMin     + (float)rnd.NextDouble() * (orderedSaboMax     - orderedSaboMin);
+            roll.killDistance = orderedKillDistMin + (float)rnd.NextDouble() * (orderedKillDistMax - orderedKillDistMin);
+            roll.voteMultiplier = (byte)rnd.Next(orderedVoteMin, orderedVoteMax + 1);
+            roll.ventAccess   = rnd.NextDouble() * 100f < ventChance;
+
             if (!tasksEnabled) {
-                tasks = NoTaskChange;
-            } else if (!randomizeTasks && tasksMod.TryGetValue(player.PlayerId, out byte existingTasks)) {
-                tasks = existingTasks;
+                roll.tasks = NoTaskChange;
+            } else if (!randomizeTasks && playerId != byte.MaxValue && tasksMod.TryGetValue(playerId, out byte existingTasks)) {
+                roll.tasks = existingTasks;
             } else {
-                tasks = (byte)rnd.Next(orderedTasksMin, orderedTasksMax + 1);
+                roll.tasks = (byte)rnd.Next(orderedTasksMin, orderedTasksMax + 1);
             }
+            return roll;
+        }
+
+        // Test mode: force-applies a fresh Chance roll to the local (host) player right now, so the
+        // configured stats can be verified live. Activates Chance if needed. Requires the Chance
+        // modifier to be enabled in the options (otherwise the effect patches stay gated off).
+        public static void ForceAssignLocal() {
+            if (!(AmongUsClient.Instance?.AmHost ?? false)) return;
+            if (!HasChanceModifier()) {
+                ChancePlugin.Logger?.LogWarning("[Chance] Test mode: enable the Chance modifier (rate > 0) for effects to apply.");
+                return;
+            }
+            var lp = PlayerControl.LocalPlayer;
+            if (lp == null || lp.Data == null || lp.Data.IsDead) return;
+
+            if (!isActive) {
+                MessageWriter writer = AmongUsClient.Instance.StartRpcImmediately(
+                    PlayerControl.LocalPlayer.NetId, ActivationRpcId, Hazel.SendOption.Reliable, -1);
+                AmongUsClient.Instance.FinishRpcImmediately(writer);
+                ApplyActivationState();
+            }
+            sendSetValues(lp, rnd);
+        }
+
+        // Sends RPC 200 from host → sets values on all clients.
+        // Format: playerId (byte), speed (float), cooldown (float), vision (float), tasks (byte),
+        //         sabotageCd (float), killDistance (float), voteMultiplier (byte), ventAccess (byte 0/1)
+        // Tasks are only re-rolled when randomizeTasks=true (initial assignment);
+        // re-randomization between meetings keeps the original task count.
+        public static void sendSetValues(PlayerControl player, System.Random rnd, bool randomizeTasks = true) {
+            ChanceRoll roll = RollValues(rnd, randomizeTasks, player.PlayerId);
 
             MessageWriter w = AmongUsClient.Instance.StartRpcImmediately(
                 PlayerControl.LocalPlayer.NetId, RpcId, Hazel.SendOption.Reliable, -1);
             w.Write(player.PlayerId);
-            w.Write(speed);
-            w.Write(cooldown);
-            w.Write(vision);
-            w.Write(tasks);
+            w.Write(roll.speed);
+            w.Write(roll.cooldown);
+            w.Write(roll.vision);
+            w.Write(roll.tasks);
+            w.Write(roll.sabotageCd);
+            w.Write(roll.killDistance);
+            w.Write(roll.voteMultiplier);
+            w.Write((byte)(roll.ventAccess ? 1 : 0));
             AmongUsClient.Instance.FinishRpcImmediately(w);
-            applyValues(player.PlayerId, speed, cooldown, vision, tasks);
+            applyValues(player.PlayerId, roll);
         }
 
-        public static void applyValues(byte id, float speed, float cooldown, float vision, byte tasks) {
+        public static void applyValues(byte id, ChanceRoll roll) {
             var p = Helpers.playerById(id);
             if (p != null && p.Data != null && !p.Data.Disconnected && !p.Data.IsDead && !chanceList.Any(x => x.PlayerId == id))
                 chanceList.Add(p);
-            speedMod[id]    = speed;
-            cooldownMod[id] = cooldown;
-            visionMod[id]   = vision;
-            tasksMod[id]    = tasks;
+            speedMod[id]          = roll.speed;
+            cooldownMod[id]       = roll.cooldown;
+            visionMod[id]         = roll.vision;
+            tasksMod[id]          = roll.tasks;
+            sabotageCdMod[id]     = roll.sabotageCd;
+            killDistanceMod[id]   = roll.killDistance;
+            voteMultiplierMod[id] = roll.voteMultiplier;
+            ventAccessMod[id]     = roll.ventAccess;
         }
 
         public static bool isChance(byte playerId) =>
@@ -384,6 +494,10 @@ namespace TOR_ChanceModifier {
                 cooldownMod.Remove(id);
                 visionMod.Remove(id);
                 tasksMod.Remove(id);
+                sabotageCdMod.Remove(id);
+                killDistanceMod.Remove(id);
+                voteMultiplierMod.Remove(id);
+                ventAccessMod.Remove(id);
             }
         }
 
@@ -438,6 +552,12 @@ namespace TOR_ChanceModifier {
         public static void OnTasksMaxChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceTasksMin, ChanceOptions.modifierChanceTasksMax, false);
         public static void OnVisionMinChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceVisionMin, ChanceOptions.modifierChanceVisionMax, true);
         public static void OnVisionMaxChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceVisionMin, ChanceOptions.modifierChanceVisionMax, false);
+        public static void OnVoteMultMinChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceVoteMultMin, ChanceOptions.modifierChanceVoteMultMax, true);
+        public static void OnVoteMultMaxChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceVoteMultMin, ChanceOptions.modifierChanceVoteMultMax, false);
+        public static void OnKillDistanceMinChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceKillDistanceMin, ChanceOptions.modifierChanceKillDistanceMax, true);
+        public static void OnKillDistanceMaxChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceKillDistanceMin, ChanceOptions.modifierChanceKillDistanceMax, false);
+        public static void OnSabotageCdMinChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceSabotageCdMin, ChanceOptions.modifierChanceSabotageCdMax, true);
+        public static void OnSabotageCdMaxChanged() => SyncOrderedFloatPair(ChanceOptions.modifierChanceSabotageCdMin, ChanceOptions.modifierChanceSabotageCdMax, false);
 
         // Builds the description text shown under the task list for the local player.
         // Other players only see the generic "Everything is random!" text.
@@ -451,9 +571,12 @@ namespace TOR_ChanceModifier {
                 return "You are CHAOS!";
 
             string description = $"Speed {speed:0.00}× | " +
-                                 $"Cooldown {cd:0.0}s | " +
+                                 $"Kill CD {cd:0.0}s | " +
                                  $"Vision {vis:0.00}×";
             if (tasks != NoTaskChange) description += $" | Tasks {tasks}";
+            if (voteMultiplierMod.TryGetValue(playerId, out byte votes)) description += $" | Votes ×{votes}";
+            if (ventAccessMod.TryGetValue(playerId, out bool vent) && vent) description += " | Vent ✓";
+            if (killDistanceMod.TryGetValue(playerId, out float kd)) description += $" | KillDist {kd:0.0}";
             return description;
         }
 
@@ -562,12 +685,17 @@ namespace TOR_ChanceModifier {
         public static bool Prefix(byte callId, MessageReader reader) {
             if (callId == Chance.RpcId) {
                 try {
-                    byte  pid      = reader.ReadByte();
-                    float speed    = reader.ReadSingle();
-                    float cooldown = reader.ReadSingle();
-                    float vision   = reader.ReadSingle();
-                    byte  tasks    = reader.ReadByte();
-                    Chance.applyValues(pid, speed, cooldown, vision, tasks);
+                    byte pid = reader.ReadByte();
+                    Chance.ChanceRoll roll = new Chance.ChanceRoll();
+                    roll.speed          = reader.ReadSingle();
+                    roll.cooldown       = reader.ReadSingle();
+                    roll.vision         = reader.ReadSingle();
+                    roll.tasks          = reader.ReadByte();
+                    roll.sabotageCd     = reader.ReadSingle();
+                    roll.killDistance   = reader.ReadSingle();
+                    roll.voteMultiplier = reader.ReadByte();
+                    roll.ventAccess     = reader.ReadByte() != 0;
+                    Chance.applyValues(pid, roll);
                 } catch { }
                 return false;  // callId 200 is a Chance RPC
             }
@@ -698,6 +826,159 @@ namespace TOR_ChanceModifier {
             if (!Chance.cooldownMod.TryGetValue(__instance.PlayerId, out float cd)) return;
             __instance.killTimer = Mathf.Clamp(__instance.killTimer, 0f, cd);
             FastDestroyableSingleton<HudManager>.Instance.KillButton.SetCoolDown(__instance.killTimer, cd);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Patch 10: Vent access — grant vent usage to Chance players that rolled it
+    // ---------------------------------------------------------------------------
+    [HarmonyPatch(typeof(Helpers), nameof(Helpers.roleCanUseVents))]
+    static class ChanceVentAccessPatch {
+        public static void Postfix(PlayerControl player, ref bool __result) {
+            if (player == null) return;
+            if (!Chance.isChance(player.PlayerId)) return;
+            if (Chance.ventAccessMod.TryGetValue(player.PlayerId, out bool canVent) && canVent)
+                __result = true;
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Patch 11: Kill distance — reselect the kill target using the Chance player's
+    // own randomized radius. Mirrors TOR's setTarget, only the distance differs.
+    // ---------------------------------------------------------------------------
+    [HarmonyPatch(typeof(TheOtherRoles.Patches.PlayerControlFixedUpdatePatch),
+                  nameof(TheOtherRoles.Patches.PlayerControlFixedUpdatePatch.setTarget))]
+    static class ChanceKillDistancePatch {
+        public static bool Prefix(ref PlayerControl __result,
+                                  bool onlyCrewmates, bool targetPlayersInVents,
+                                  List<PlayerControl> untargetablePlayers, PlayerControl targetingPlayer) {
+            PlayerControl tp = targetingPlayer ?? PlayerControl.LocalPlayer;
+            if (tp == null || tp.Data == null) return true;
+            if (!Chance.isChance(tp.PlayerId)) return true;
+            if (!Chance.killDistanceMod.TryGetValue(tp.PlayerId, out float dist)) return true;
+
+            __result = null;
+            if (!MapUtilities.CachedShipStatus) return false;
+            if (tp.Data.IsDead) return false;
+
+            PlayerControl result = null;
+            float num = dist;
+            Vector2 truePosition = tp.GetTruePosition();
+            foreach (var playerInfo in GameData.Instance.AllPlayers.GetFastEnumerator()) {
+                if (!playerInfo.Disconnected && playerInfo.PlayerId != tp.PlayerId && !playerInfo.IsDead
+                    && (!onlyCrewmates || !playerInfo.Role.IsImpostor)) {
+                    PlayerControl @object = playerInfo.Object;
+                    if (untargetablePlayers != null && untargetablePlayers.Any(x => x == @object)) continue;
+                    if (@object && (!@object.inVent || targetPlayersInVents)) {
+                        Vector2 vector = @object.GetTruePosition() - truePosition;
+                        float magnitude = vector.magnitude;
+                        if (magnitude <= num && !PhysicsHelpers.AnyNonTriggersBetween(
+                                truePosition, vector.normalized, magnitude, Constants.ShipAndObjectsMask)) {
+                            result = @object;
+                            num = magnitude;
+                        }
+                    }
+                }
+            }
+            __result = result;
+            return false;
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Patch 12: Sabotage cooldown — lower the (team-shared) sabotage timer so a Chance
+    // impostor's rolled value acts as a real cooldown reduction.
+    //
+    // Vanilla validates a sabotage in SabotageSystemType.UpdateSystem against the shared
+    // timer, and that check runs on the HOST. So clamping only the local timer unlocks the
+    // button on a remote client's UI but the host still rejects the early sabotage. We
+    // therefore clamp in two places:
+    //   • Local UI: lower the locally-read timer for the local Chance impostor so the
+    //     sabotage button unlocks on time on this client.
+    //   • Host authority: lower the shared timer to the smallest rolled cooldown among
+    //     alive Chance impostors so the host's UpdateSystem validation passes for them.
+    // The timer is team-shared (vanilla has no per-player sabotage cooldown), so the host
+    // clamp uses the minimum — consistent with that approximation.
+    // ---------------------------------------------------------------------------
+    [HarmonyPatch(typeof(HudManager), nameof(HudManager.Update))]
+    static class ChanceSabotageCooldownPatch {
+        public static void Postfix() {
+            var ship = ShipStatus.Instance;
+            if (ship == null) return;
+            try {
+                if (!ship.Systems.TryGetValue(SystemTypes.Sabotage, out var sys)) return;
+                var sab = sys.TryCast<SabotageSystemType>();
+                if (sab == null) return;
+
+                float? targetCd = null;
+
+                var lp = PlayerControl.LocalPlayer;
+                if (lp != null && lp.Data != null && !lp.Data.IsDead && lp.Data.Role != null
+                    && lp.Data.Role.IsImpostor && Chance.isChance(lp.PlayerId)
+                    && Chance.sabotageCdMod.TryGetValue(lp.PlayerId, out float localCd)) {
+                    targetCd = localCd;
+                }
+
+                if (AmongUsClient.Instance != null && AmongUsClient.Instance.AmHost) {
+                    foreach (var kv in Chance.sabotageCdMod) {
+                        if (!Chance.isChance(kv.Key)) continue;
+                        var p = Helpers.playerById(kv.Key);
+                        if (p == null || p.Data == null || p.Data.IsDead
+                            || p.Data.Role == null || !p.Data.Role.IsImpostor) continue;
+                        if (targetCd == null || kv.Value < targetCd.Value) targetCd = kv.Value;
+                    }
+                }
+
+                if (targetCd.HasValue && sab.Timer > targetCd.Value) sab.Timer = targetCd.Value;
+            } catch { }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Patch 13: Vote multiplier — patched manually (see ChancePlugin.Load) because the
+    // target is TOR's private nested CalculateVotes. Adds (multiplier − base) votes for
+    // each Chance voter to the player they voted for; 0 removes their vote entirely.
+    // ---------------------------------------------------------------------------
+    static class ChanceVoteMultiplierPatch {
+        public static void TryPatch(HarmonyLib.Harmony harmony) {
+            try {
+                // Look the type up directly in TOR's assembly rather than via AccessTools.TypeByName,
+                // which scans every loaded assembly (including Il2Cppmscorlib) and logs noisy
+                // ReflectionTypeLoadException warnings.
+                var t = typeof(TheOtherRoles.TheOtherRoles).Assembly
+                    .GetType("TheOtherRoles.Patches.MeetingHudPatch+MeetingCalculateVotesPatch");
+                var method = t == null ? null : AccessTools.Method(t, "CalculateVotes");
+                if (method == null) {
+                    ChancePlugin.Logger?.LogWarning("[Chance] Vote multiplier: CalculateVotes not found, skipping patch.");
+                    return;
+                }
+                harmony.Patch(method, postfix: new HarmonyMethod(typeof(ChanceVoteMultiplierPatch), nameof(Postfix)));
+            } catch (Exception e) {
+                ChancePlugin.Logger?.LogError($"[Chance] Vote multiplier patch failed: {e}");
+            }
+        }
+
+        public static void Postfix(MeetingHud __instance, ref Dictionary<byte, int> __result) {
+            if (__result == null || __instance == null || !Chance.IsActive()) return;
+            var states = __instance.playerStates;
+            if (states == null) return;
+            for (int i = 0; i < states.Length; i++) {
+                var pva = states[i];
+                if (pva == null) continue;
+                byte votedFor = pva.VotedFor;
+                if (votedFor == 252 || votedFor == 254 || votedFor == 255) continue; // skip / no-vote / dead
+                byte voterId = (byte)pva.TargetPlayerId;
+                if (!Chance.IsChancePlayer(voterId)) continue;
+                if (!Chance.voteMultiplierMod.TryGetValue(voterId, out byte mult)) continue;
+
+                int baseVotes = (Mayor.mayor != null && Mayor.mayor.PlayerId == voterId && Mayor.voteTwice) ? 2 : 1;
+                int delta = mult - baseVotes;
+                if (delta == 0) continue;
+                if (__result.TryGetValue(votedFor, out int cur))
+                    __result[votedFor] = Math.Max(0, cur + delta);
+                else if (delta > 0)
+                    __result[votedFor] = delta;
+            }
         }
     }
 

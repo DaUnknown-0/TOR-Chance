@@ -21,7 +21,7 @@ namespace TOR_ChanceModifier {
     [BepInProcess("Among Us.exe")]
     public class ChancePlugin : BasePlugin {
         public const string Id = "com.tormod.chancemodifier";
-        public const string VersionString = "1.0.0";
+        public const string VersionString = "1.0.12";
         public static System.Version Version = System.Version.Parse(VersionString);
 
         public static BepInEx.Logging.ManualLogSource Logger;
@@ -53,11 +53,11 @@ namespace TOR_ChanceModifier {
                 2.5f, 0.25f, 3f, 0.25f, ChanceOptions.modifierChance, false, Chance.OnSpeedMaxChanged);
 
             ChanceOptions.modifierChanceCooldownMin = CustomOption.Create(
-                1114, Types.Modifier, "Min Cooldown (V3)",
+                1114, Types.Modifier, "Min Kill Cooldown (V3)",
                 5f, 2.5f, 60f, 2.5f, ChanceOptions.modifierChance, false, Chance.OnCooldownMinChanged);
 
             ChanceOptions.modifierChanceCooldownMax = CustomOption.Create(
-                1115, Types.Modifier, "Max Cooldown (V4)",
+                1115, Types.Modifier, "Max Kill Cooldown (V4)",
                 60f, 2.5f, 60f, 2.5f, ChanceOptions.modifierChance, false, Chance.OnCooldownMaxChanged);
 
             ChanceOptions.modifierChanceTasksMin = CustomOption.Create(
@@ -83,6 +83,34 @@ namespace TOR_ChanceModifier {
             ChanceOptions.modifierChanceVisionMax = CustomOption.Create(
                 1120, Types.Modifier, "Max Vision",
                 5f, 0.25f, 5f, 0.25f, ChanceOptions.modifierChance, false, Chance.OnVisionMaxChanged);
+
+            ChanceOptions.modifierChanceVentChance = CustomOption.Create(
+                1129, Types.Modifier, "Vent Access Chance %",
+                0f, 0f, 100f, 5f, ChanceOptions.modifierChance);
+
+            ChanceOptions.modifierChanceVoteMultMin = CustomOption.Create(
+                1130, Types.Modifier, "Min Vote Multiplier (V8)",
+                1f, 0f, 3f, 1f, ChanceOptions.modifierChance, false, Chance.OnVoteMultMinChanged);
+
+            ChanceOptions.modifierChanceVoteMultMax = CustomOption.Create(
+                1131, Types.Modifier, "Max Vote Multiplier (V9)",
+                1f, 0f, 3f, 1f, ChanceOptions.modifierChance, false, Chance.OnVoteMultMaxChanged);
+
+            ChanceOptions.modifierChanceKillDistanceMin = CustomOption.Create(
+                1132, Types.Modifier, "Min Kill Distance (V10)",
+                1f, 0.5f, 2.5f, 0.25f, ChanceOptions.modifierChance, false, Chance.OnKillDistanceMinChanged);
+
+            ChanceOptions.modifierChanceKillDistanceMax = CustomOption.Create(
+                1133, Types.Modifier, "Max Kill Distance (V11)",
+                1.75f, 0.5f, 2.5f, 0.25f, ChanceOptions.modifierChance, false, Chance.OnKillDistanceMaxChanged);
+
+            ChanceOptions.modifierChanceSabotageCdMin = CustomOption.Create(
+                1134, Types.Modifier, "Min Sabotage Cooldown (Impostor)",
+                5f, 0f, 60f, 5f, ChanceOptions.modifierChance, false, Chance.OnSabotageCdMinChanged);
+
+            ChanceOptions.modifierChanceSabotageCdMax = CustomOption.Create(
+                1135, Types.Modifier, "Max Sabotage Cooldown (Impostor)",
+                30f, 0f, 60f, 5f, ChanceOptions.modifierChance, false, Chance.OnSabotageCdMaxChanged);
 
             ChanceOptions.modifierChanceActivationMode = new CustomOption(
                 1121, Types.Modifier, "Activation Delay Mode",
@@ -123,8 +151,12 @@ namespace TOR_ChanceModifier {
                 ChanceOptions.chaosMode, false);
 
             Harmony.PatchAll(typeof(ChancePlugin).Assembly);
+            // Vote multiplier targets a private nested TOR method, so it is patched manually
+            // (isolated from PatchAll so a lookup failure can't abort the other patches).
+            ChanceVoteMultiplierPatch.TryPatch(Harmony);
 
             AddComponent<ChanceModUpdater>();
+            AddComponent<ChanceTestMode>();
         }
     }
 
