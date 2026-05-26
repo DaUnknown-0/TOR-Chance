@@ -156,7 +156,6 @@ namespace TOR_ChanceModifier {
             ChanceVoteMultiplierPatch.TryPatch(Harmony);
 
             AddComponent<ChanceModUpdater>();
-            AddComponent<ChanceTestMode>();
         }
     }
 

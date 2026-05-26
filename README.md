@@ -21,30 +21,6 @@ This mod is not affiliated with Among Us or Innersloth LLC, and the content cont
 - Re-randomizes speed/cooldown/vision after every meeting; task counts stay fixed
 - Local player sees their current stats under their role description
 
-### Test mode
-
-Verify the configured stats without a full lobby:
-
-- **F4** — toggle a read-only preview panel that rolls a sample stat set from the current option
-  ranges (`R` rerolls). In a running game as host the panel also offers *Apply to me (live)*, which
-  force-assigns the Chance modifier to your own player so you can feel the effects.
-
-To test with dummies, use the companion **TOR Debug Unlock** plugin. Dummies only work **offline** —
-on an online server the round freezes after the countdown because the server waits for the (non
-existent) dummy clients. Recommended workflow:
-
-1. Enable the Chance modifier (rate > 0) once in any lobby (the setting persists).
-2. Open **Freeplay** (main menu → *How To Play*). There is no server and no start handshake, so
-   nothing freezes. (A round on a server cannot use these dummies — the server waits for the non
-   existent dummy clients and the round freezes after the countdown.)
-3. Press `F` to spawn dummies (they appear as killable crewmates).
-4. Press `I` to toggle yourself to Impostor → the kill button appears, so you can kill the dummies
-   and test kill distance / kill cooldown.
-5. Open the F4 panel and click *Apply to me (live)* to feel the Chance stats (speed, vision, vent, …).
-
-> Note: *Kill distance* and *sabotage cooldown* are applied client-side per player; sabotage cooldown
-> only affects impostors (vanilla has no per-player sabotage cooldown, so it is a local approximation).
-
 ## Requirements
 
 - [The Other Roles](https://github.com/TheOtherRolesAU/TheOtherRoles) (hard dependency)

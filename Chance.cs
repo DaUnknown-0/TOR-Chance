@@ -119,8 +119,7 @@ namespace TOR_ChanceModifier {
         }
 
         // Loads every min/max range, chance % and activation setting from the options and applies
-        // the min≤max ordering + task cap. No runtime/dictionary state is touched, so it is safe to
-        // call outside a game (the preview panel uses it to roll sample values from live options).
+        // the min≤max ordering + task cap. No runtime/dictionary state is touched.
         public static void ReloadRanges() {
             speedMin        = ChanceOptions.modifierChanceSpeedMin?.getFloat()        ?? 0.5f;
             speedMax        = ChanceOptions.modifierChanceSpeedMax?.getFloat()        ?? 2.5f;
@@ -369,7 +368,7 @@ namespace TOR_ChanceModifier {
             }
         }
 
-        // One randomized stat set for a Chance player (or a sample roll for the preview panel).
+        // One randomized stat set for a Chance player.
         public struct ChanceRoll {
             public float speed;
             public float cooldown;
@@ -381,8 +380,7 @@ namespace TOR_ChanceModifier {
             public bool  ventAccess;
         }
 
-        // Rolls one stat set from the configured ranges. No side effects — used by both the live
-        // assignment (sendSetValues) and the read-only preview panel. `playerId` is only consulted
+        // Rolls one stat set from the configured ranges. No side effects. `playerId` is only consulted
         // when randomizeTasks=false to keep an already-assigned task count stable.
         public static ChanceRoll RollValues(System.Random rnd, bool randomizeTasks = true, byte playerId = byte.MaxValue) {
             float orderedSpeedMin = Mathf.Min(speedMin, speedMax);
@@ -417,27 +415,6 @@ namespace TOR_ChanceModifier {
                 roll.tasks = (byte)rnd.Next(orderedTasksMin, orderedTasksMax + 1);
             }
             return roll;
-        }
-
-        // Test mode: force-applies a fresh Chance roll to the local (host) player right now, so the
-        // configured stats can be verified live. Activates Chance if needed. Requires the Chance
-        // modifier to be enabled in the options (otherwise the effect patches stay gated off).
-        public static void ForceAssignLocal() {
-            if (!(AmongUsClient.Instance?.AmHost ?? false)) return;
-            if (!HasChanceModifier()) {
-                ChancePlugin.Logger?.LogWarning("[Chance] Test mode: enable the Chance modifier (rate > 0) for effects to apply.");
-                return;
-            }
-            var lp = PlayerControl.LocalPlayer;
-            if (lp == null || lp.Data == null || lp.Data.IsDead) return;
-
-            if (!isActive) {
-                MessageWriter writer = AmongUsClient.Instance.StartRpcImmediately(
-                    PlayerControl.LocalPlayer.NetId, ActivationRpcId, Hazel.SendOption.Reliable, -1);
-                AmongUsClient.Instance.FinishRpcImmediately(writer);
-                ApplyActivationState();
-            }
-            sendSetValues(lp, rnd);
         }
 
         // Sends RPC 200 from host → sets values on all clients.
