@@ -21,7 +21,7 @@ namespace TOR_ChanceModifier {
     [BepInProcess("Among Us.exe")]
     public class ChancePlugin : BasePlugin {
         public const string Id = "com.tormod.chancemodifier";
-        public const string VersionString = "1.0.12";
+        public const string VersionString = "1.0.15";
         public static System.Version Version = System.Version.Parse(VersionString);
 
         public static BepInEx.Logging.ManualLogSource Logger;
@@ -172,22 +172,41 @@ namespace TOR_ChanceModifier {
             string text = __instance.text.text;
             if (string.IsNullOrEmpty(text)) return;
 
-            // Click the mod name to show/hide the credit line.
+            // Click the mod name to toggle the credit line. PingTracker.text is a world-space
+            // TextMeshPro (no canvas), so the link raycast needs the rendering camera.
             if (Input.GetMouseButtonDown(0)) {
-                Camera cam = __instance.text.canvas != null
-                    && __instance.text.canvas.renderMode != RenderMode.ScreenSpaceOverlay
-                    ? __instance.text.canvas.worldCamera : null;
+                Camera cam = Camera.main;
+                var canvas = __instance.text.canvas;
+                if (canvas != null)
+                    cam = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null
+                        : (canvas.worldCamera != null ? canvas.worldCamera : Camera.main);
                 int link = TMPro.TMP_TextUtilities.FindIntersectingLink(__instance.text, Input.mousePosition, cam);
                 if (link != -1 && __instance.text.textInfo.linkInfo[link].GetLinkID() == "chanceCredits")
                     showCredits = !showCredits;
             }
 
+            // Clickable mod name, inserted just below the "TheOtherRoles vX" line.
             string chanceLine = $"<link=\"chanceCredits\"><color=#FF8C00>Chance Modifier</color> v{ChancePlugin.Version}</link>";
-            if (showCredits) chanceLine += "\n<size=70%>Modded by <color=#FCCE03FF>DaUnknown</color></size>";
             int nl = text.IndexOf('\n');
-            __instance.text.text = nl >= 0
+            text = nl >= 0
                 ? text.Substring(0, nl + 1) + chanceLine + "\n" + text.Substring(nl + 1)
                 : text + "\n" + chanceLine;
+
+            // When toggled on, show the credit directly under TOR's "Design by Bavari" line.
+            if (showCredits) {
+                string credit = "\n<size=70%>Modded by <color=#FCCE03FF>DaUnknown</color></size>";
+                int anchor = text.IndexOf("Bavari");
+                if (anchor >= 0) {
+                    int lineEnd = text.IndexOf('\n', anchor);
+                    text = lineEnd >= 0
+                        ? text.Substring(0, lineEnd) + credit + text.Substring(lineEnd)
+                        : text + credit;
+                } else {
+                    text += credit;
+                }
+            }
+
+            __instance.text.text = text;
         }
     }
 }
