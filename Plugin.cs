@@ -168,7 +168,7 @@ namespace TOR_ChanceModifier {
             if (__instance == null || __instance.text == null) return;
             string text = __instance.text.text;
             if (string.IsNullOrEmpty(text)) return;
-            string chanceLine = $"<color=#FF8C00>Chance Modifier</color> v{ChancePlugin.Version}";
+            string chanceLine = $"<color=#FF8C00>Chance Modifier</color> v{ChancePlugin.Version} - Modded by <color=#FCCE03FF>DaUnknown</color>";
             int nl = text.IndexOf('\n');
             __instance.text.text = nl >= 0
                 ? text.Substring(0, nl + 1) + chanceLine + "\n" + text.Substring(nl + 1)
