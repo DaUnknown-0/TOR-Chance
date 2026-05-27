@@ -547,14 +547,15 @@ namespace TOR_ChanceModifier {
                 || !tasksMod.TryGetValue(playerId, out byte tasks))
                 return "You are CHAOS!";
 
-            string description = $"Speed {speed:0.00}× | " +
-                                 $"Kill CD {cd:0.0}s | " +
-                                 $"Vision {vis:0.00}×";
-            if (tasks != NoTaskChange) description += $" | Tasks {tasks}";
-            if (voteMultiplierMod.TryGetValue(playerId, out byte votes)) description += $" | Votes ×{votes}";
-            if (ventAccessMod.TryGetValue(playerId, out bool vent) && vent) description += " | Vent ✓";
-            if (killDistanceMod.TryGetValue(playerId, out float kd)) description += $" | KillDist {kd:0.0}";
-            return description;
+            string line1 = $"Speed {speed:0.00}× | Kill CD {cd:0.0}s | Vision {vis:0.00}×";
+
+            var extras = new List<string>();
+            if (tasks != NoTaskChange) extras.Add($"Tasks {tasks}");
+            if (voteMultiplierMod.TryGetValue(playerId, out byte votes)) extras.Add($"Votes ×{votes}");
+            if (ventAccessMod.TryGetValue(playerId, out bool vent) && vent) extras.Add("Vent ✓");
+            if (killDistanceMod.TryGetValue(playerId, out float kd)) extras.Add($"KillDist {kd:0.0}");
+
+            return extras.Count > 0 ? line1 + "\n" + string.Join(" | ", extras) : line1;
         }
 
         // Auto-report: once per second, if a body is within report range of the local Chance
@@ -816,6 +817,41 @@ namespace TOR_ChanceModifier {
             if (!Chance.isChance(player.PlayerId)) return;
             if (Chance.ventAccessMod.TryGetValue(player.PlayerId, out bool canVent) && canVent)
                 __result = true;
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Patch 10b: Vent button placement — for a Chance player who rolled vent access but whose role
+    // also has ability buttons, TOR's ImpostorVentButton sits in the ability-button cluster and gets
+    // overlapped, so it can't be pressed. TOR's CustomButton ability buttons are positioned at
+    // UseButton + PositionOffset with offsets up to highRowRight = (0, 2.06), all at x <= 0. We move
+    // the vent button ABOVE that cluster (UseButton.y + VentYOffset) so its x/y never coincides with
+    // an ability, and nudge it slightly toward the camera as a click safeguard. Re-applied every
+    // frame because Among Us' AspectPosition can reset the transform. Impostors keep their native
+    // vent layout.
+    // ---------------------------------------------------------------------------
+    [HarmonyPatch(typeof(HudManager), nameof(HudManager.Update))]
+    static class ChanceVentButtonFrontPatch {
+        // World-space offset above the use/ability button column. ~2.6 clears the topmost ability row
+        // (highRowRight at +2.06). Tune in-game if the button sits too high/low.
+        private const float VentYOffset = 2.6f;
+
+        public static void Postfix(HudManager __instance) {
+            if (__instance == null || __instance.ImpostorVentButton == null || __instance.UseButton == null) return;
+            var lp = PlayerControl.LocalPlayer;
+            if (lp == null || lp.Data == null) return;
+            if (lp.Data.Role != null && lp.Data.Role.IsImpostor) return; // impostors vent natively
+            if (!Chance.isChance(lp.PlayerId)) return;
+            if (!Chance.ventAccessMod.TryGetValue(lp.PlayerId, out bool canVent) || !canVent) return;
+
+            var vb = __instance.ImpostorVentButton;
+            if (!vb.isActiveAndEnabled) return;
+
+            // Anchor to the use button and lift the vent button above the whole ability cluster.
+            // World-space so it's independent of which transform parent each button lives under;
+            // z one unit forward keeps the collider clickable even if anything else lines up.
+            Vector3 u = __instance.UseButton.transform.position;
+            vb.transform.position = new Vector3(u.x, u.y + VentYOffset, u.z - 1f);
         }
     }
 
