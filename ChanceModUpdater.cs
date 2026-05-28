@@ -12,7 +12,6 @@ using BepInEx.Unity.IL2CPP.Utils;
 using Il2CppInterop.Runtime.Attributes;
 using TheOtherRoles.Modules;
 using UnityEngine;
-using UsefulTORStuff;
 using UnityEngine.Networking;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -157,7 +156,7 @@ namespace TOR_ChanceModifier {
             if (_busy || scene.name != "MainMenu" || Releases == null) return;
 
             // Wenn Mod-Manager aktiviert ist, keine eigenen Update-Buttons anzeigen.
-            if (ModManagerRegistry.IsModManagerEnabled()) {
+            if (IsModManagerEnabled()) {
                 return;
             }
 
@@ -253,6 +252,16 @@ namespace TOR_ChanceModifier {
             var latestRelease = Releases.FirstOrDefault();
             if (latestRelease != null && latestRelease.IsNewer(ChancePlugin.Version)) {
                 StartDownloadRelease(latestRelease);
+            }
+        }
+
+        // Prüft via AppDomain ob Mod-Manager aktiviert ist (keine Compile-Zeit-Referenz).
+        private static bool IsModManagerEnabled() {
+            try {
+                var data = AppDomain.CurrentDomain.GetData("ModManager.IsEnabled");
+                return data is bool b && b;
+            } catch {
+                return false;
             }
         }
     }

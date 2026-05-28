@@ -14,7 +14,6 @@ using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
 using TheOtherRoles;
 using UnityEngine;
-using UsefulTORStuff;
 using Types = TheOtherRoles.CustomOption.CustomOptionType;
 
 namespace TOR_ChanceModifier {
@@ -167,18 +166,22 @@ namespace TOR_ChanceModifier {
 
             AddComponent<ChanceModUpdater>();
 
-            // Registriere diese Mod in der Mod-Manager-Registry.
-            ModManagerRegistry.RegisterMod(new ModInfo {
-                Guid = Id,
-                Name = "Chance Modifier",
-                Version = Version,
-                RepositoryOwner = "DaUnknown-0",
-                RepositoryName = "TOR-Chance",
-                ButtonColor = Color.yellow,
-                HasUpdate = () => ChanceModUpdater.Instance?.HasUpdate() ?? false,
-                TriggerUpdate = () => ChanceModUpdater.Instance?.TriggerUpdateFromManager(),
-                Enabled = enabled
-            });
+            // Registriere diese Mod in der Mod-Manager-Registry via AppDomain (keine Compile-Zeit-Referenz).
+            try {
+                var modData = new System.Collections.Generic.Dictionary<string, object> {
+                    { "Guid", Id },
+                    { "Name", "Chance Modifier" },
+                    { "Version", Version },
+                    { "RepositoryOwner", "DaUnknown-0" },
+                    { "RepositoryName", "TOR-Chance" },
+                    { "ButtonColor", Color.yellow },
+                    { "Enabled", enabled }
+                };
+                AppDomain.CurrentDomain.SetData($"ModManager.RegisteredMod.{Id}", modData);
+                Logger.LogInfo($"Registered ChanceMod in Mod Manager registry.");
+            } catch (System.Exception ex) {
+                Logger.LogError($"Failed to register ChanceMod: {ex}");
+            }
         }
     }
 
