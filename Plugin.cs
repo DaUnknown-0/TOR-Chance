@@ -9,10 +9,12 @@ global using Il2CppInterop.Runtime.InteropTypes.Arrays;
 global using Il2CppInterop.Runtime.Injection;
 
 using BepInEx;
+using BepInEx.Configuration;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
 using TheOtherRoles;
 using UnityEngine;
+using UsefulTORStuff;
 using Types = TheOtherRoles.CustomOption.CustomOptionType;
 
 namespace TOR_ChanceModifier {
@@ -30,6 +32,14 @@ namespace TOR_ChanceModifier {
 
         public override void Load() {
             Logger = Log;
+
+            // Check if this mod is enabled. Early return wenn deaktiviert.
+            var enabled = Config.Bind("General", "Enabled", true, "Enable this mod");
+            if (!enabled.Value) {
+                Logger.LogInfo("ChanceMod is disabled in config — skipping load.");
+                return;
+            }
+
             // Create options here – TOR has already called CustomOptionHolder.Load()
             string[] rates     = CustomOptionHolder.rates;
             string[] quantities = CustomOptionHolder.ratesModifier;
@@ -156,6 +166,19 @@ namespace TOR_ChanceModifier {
             ChanceVoteMultiplierPatch.TryPatch(Harmony);
 
             AddComponent<ChanceModUpdater>();
+
+            // Registriere diese Mod in der Mod-Manager-Registry.
+            ModManagerRegistry.RegisterMod(new ModInfo {
+                Guid = Id,
+                Name = "Chance Modifier",
+                Version = Version,
+                RepositoryOwner = "DaUnknown-0",
+                RepositoryName = "TOR-Chance",
+                ButtonColor = Color.yellow,
+                HasUpdate = () => ChanceModUpdater.Instance?.HasUpdate() ?? false,
+                TriggerUpdate = () => ChanceModUpdater.Instance?.TriggerUpdateFromManager(),
+                Enabled = enabled
+            });
         }
     }
 

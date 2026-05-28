@@ -12,6 +12,7 @@ using BepInEx.Unity.IL2CPP.Utils;
 using Il2CppInterop.Runtime.Attributes;
 using TheOtherRoles.Modules;
 using UnityEngine;
+using UsefulTORStuff;
 using UnityEngine.Networking;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -154,6 +155,12 @@ namespace TOR_ChanceModifier {
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode) {
             if (_busy || scene.name != "MainMenu" || Releases == null) return;
+
+            // Wenn Mod-Manager aktiviert ist, keine eigenen Update-Buttons anzeigen.
+            if (ModManagerRegistry.IsModManagerEnabled()) {
+                return;
+            }
+
             var latestRelease = Releases.FirstOrDefault();
             if (latestRelease == null || !latestRelease.IsNewer(ChancePlugin.Version) || !latestRelease.Assets.Any(FilterPluginAsset))
                 return;
@@ -227,6 +234,26 @@ namespace TOR_ChanceModifier {
                     DataManager.Player.Announcements.allAnnouncements = backup;
                 }
             })));
+        }
+
+        // Callback-Methoden für ModManagerRegistry: Prüft ob ein Update verfügbar ist.
+        [HideFromIl2Cpp]
+        public bool HasUpdate() {
+            if (Releases == null || Releases.Count == 0) return false;
+            var latestRelease = Releases.FirstOrDefault();
+            return latestRelease != null
+                && latestRelease.IsNewer(ChancePlugin.Version)
+                && latestRelease.Assets.Any(FilterPluginAsset);
+        }
+
+        // Callback-Methode für ModManagerRegistry: Startet den Update-Download.
+        [HideFromIl2Cpp]
+        public void TriggerUpdateFromManager() {
+            if (Releases == null || Releases.Count == 0) return;
+            var latestRelease = Releases.FirstOrDefault();
+            if (latestRelease != null && latestRelease.IsNewer(ChancePlugin.Version)) {
+                StartDownloadRelease(latestRelease);
+            }
         }
     }
 }
