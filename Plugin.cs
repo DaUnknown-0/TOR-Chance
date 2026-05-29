@@ -176,7 +176,8 @@ namespace TOR_ChanceModifier {
                     { "RepositoryOwner", "DaUnknown-0" },
                     { "RepositoryName", "TOR-Chance" },
                     { "ButtonColor", Color.yellow },
-                    { "Enabled", enabled }
+                    { "Enabled", enabled },
+                    { "RuntimeEnabled", true }
                 };
                 AppDomain.CurrentDomain.SetData($"ModManager.RegisteredMod.{Id}", modData);
                 Logger.LogInfo($"Registered ChanceMod in Mod Manager registry.");
