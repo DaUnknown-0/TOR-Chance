@@ -33,8 +33,29 @@ namespace TOR_ChanceModifier {
         public override void Load() {
             Logger = Log;
 
-            // Check if this mod is enabled. Early return wenn deaktiviert.
+            // Check if this mod is enabled.
             var enabled = Config.Bind("General", "Enabled", true, "Enable this mod");
+
+            // Im Mod-Manager registrieren — auch wenn deaktiviert, damit der Mod dort sichtbar
+            // bleibt und wieder aktiviert werden kann. RuntimeEnabled spiegelt den echten Ladezustand.
+            try {
+                var modData = new System.Collections.Generic.Dictionary<string, object> {
+                    { "Guid", Id },
+                    { "Name", "Chance Modifier" },
+                    { "Version", Version },
+                    { "RepositoryOwner", "DaUnknown-0" },
+                    { "RepositoryName", "TOR-Chance" },
+                    { "ButtonColor", Color.yellow },
+                    { "Enabled", enabled },
+                    { "RuntimeEnabled", enabled.Value }
+                };
+                AppDomain.CurrentDomain.SetData($"ModManager.RegisteredMod.{Id}", modData);
+                Logger.LogInfo($"Registered ChanceMod in Mod Manager registry (runtime={enabled.Value}).");
+            } catch (System.Exception ex) {
+                Logger.LogError($"Failed to register ChanceMod: {ex}");
+            }
+
+            // Early return wenn deaktiviert (Registrierung ist oben bereits erfolgt).
             if (!enabled.Value) {
                 Logger.LogInfo("ChanceMod is disabled in config — skipping load.");
                 return;
@@ -166,24 +187,6 @@ namespace TOR_ChanceModifier {
             ChanceVoteMultiplierPatch.TryPatch(Harmony);
 
             AddComponent<ChanceModUpdater>();
-
-            // Registriere diese Mod in der Mod-Manager-Registry via AppDomain (keine Compile-Zeit-Referenz).
-            try {
-                var modData = new System.Collections.Generic.Dictionary<string, object> {
-                    { "Guid", Id },
-                    { "Name", "Chance Modifier" },
-                    { "Version", Version },
-                    { "RepositoryOwner", "DaUnknown-0" },
-                    { "RepositoryName", "TOR-Chance" },
-                    { "ButtonColor", Color.yellow },
-                    { "Enabled", enabled },
-                    { "RuntimeEnabled", true }
-                };
-                AppDomain.CurrentDomain.SetData($"ModManager.RegisteredMod.{Id}", modData);
-                Logger.LogInfo($"Registered ChanceMod in Mod Manager registry.");
-            } catch (System.Exception ex) {
-                Logger.LogError($"Failed to register ChanceMod: {ex}");
-            }
         }
     }
 
