@@ -96,6 +96,10 @@ namespace TOR_ChanceModifier {
         private static AudioClip activationSoundClip;
         private static float reportCheckTimer;
 
+        // Last observed shared sabotage timer; a jump UP between frames marks a fresh cooldown cycle.
+        internal static float lastSabTimer = -1f;
+        internal const float SabEdgeEps = 0.5f;
+
         public static void clearAndReload() {
             chanceList   = new List<PlayerControl>();
             speedMod     = new Dictionary<byte, float>();
@@ -116,6 +120,7 @@ namespace TOR_ChanceModifier {
             activationSoundPlayed = false;
             isActive = false;
             reportCheckTimer = 0f;
+            lastSabTimer = -1f;
         }
 
         // Loads every min/max range, chance % and activation setting from the options and applies
@@ -554,6 +559,9 @@ namespace TOR_ChanceModifier {
             if (voteMultiplierMod.TryGetValue(playerId, out byte votes)) extras.Add($"Votes ×{votes}");
             if (ventAccessMod.TryGetValue(playerId, out bool vent) && vent) extras.Add("Vent ✓");
             if (killDistanceMod.TryGetValue(playerId, out float kd)) extras.Add($"KillDist {kd:0.0}");
+            // Sabotage cooldown only affects impostors, so only surface it for them.
+            if (PlayerControl.LocalPlayer.Data?.Role?.IsImpostor == true
+                && sabotageCdMod.TryGetValue(playerId, out float scd)) extras.Add($"Sabo CD {scd:0.0}s");
 
             return extras.Count > 0 ? line1 + "\n" + string.Join(" | ", extras) : line1;
         }
@@ -823,18 +831,32 @@ namespace TOR_ChanceModifier {
     // ---------------------------------------------------------------------------
     // Patch 10b: Vent button placement — for a Chance player who rolled vent access but whose role
     // also has ability buttons, TOR's ImpostorVentButton sits in the ability-button cluster and gets
-    // overlapped, so it can't be pressed. TOR's CustomButton ability buttons are positioned at
-    // UseButton + PositionOffset with offsets up to highRowRight = (0, 2.06), all at x <= 0. We move
-    // the vent button ABOVE that cluster (UseButton.y + VentYOffset) so its x/y never coincides with
-    // an ability, and nudge it slightly toward the camera as a click safeguard. Re-applied every
-    // frame because Among Us' AspectPosition can reset the transform. Impostors keep their native
-    // vent layout.
+    // overlapped, so it can't be pressed. TOR's CustomButton ability buttons sit at
+    // UseButton + PositionOffset, picking offsets from CustomButton.ButtonPositions. Instead of a
+    // fixed offset (which is role-agnostic and unnecessarily high for simple roles), we pick the first
+    // free slot the local role's ACTIVE buttons don't occupy, and place the vent button there. So a
+    // plain crewmate gets it right next to the use button, while a button-heavy role pushes it up to
+    // the next free slot. Re-applied every frame because Among Us' AspectPosition can reset the
+    // transform; z one unit forward keeps the collider clickable. Impostors keep their native layout.
     // ---------------------------------------------------------------------------
     [HarmonyPatch(typeof(HudManager), nameof(HudManager.Update))]
     static class ChanceVentButtonFrontPatch {
-        // World-space offset above the use/ability button column. ~2.6 clears the topmost ability row
-        // (highRowRight at +2.06). Tune in-game if the button sits too high/low.
-        private const float VentYOffset = 2.6f;
+        // Candidate slots, ordered near/low → high. Mirrors TOR's CustomButton.ButtonPositions so the
+        // vent button lands exactly on the grid the role buttons use.
+        private static readonly Vector3[] CandidateSlots = {
+            TheOtherRoles.Objects.CustomButton.ButtonPositions.lowerRowRight,   // (-2, -0.06)
+            TheOtherRoles.Objects.CustomButton.ButtonPositions.lowerRowCenter,  // (-3, -0.06)
+            TheOtherRoles.Objects.CustomButton.ButtonPositions.lowerRowLeft,    // (-4, -0.06)
+            TheOtherRoles.Objects.CustomButton.ButtonPositions.upperRowLeft,    // (-2,  1)
+            TheOtherRoles.Objects.CustomButton.ButtonPositions.upperRowCenter,  // (-1,  1)
+            TheOtherRoles.Objects.CustomButton.ButtonPositions.upperRowFarLeft, // (-3,  1)
+            TheOtherRoles.Objects.CustomButton.ButtonPositions.upperRowRight,   // ( 0,  1)
+            TheOtherRoles.Objects.CustomButton.ButtonPositions.highRowRight,    // ( 0,  2.06)
+        };
+        // Above the entire cluster as a last resort when every candidate slot is taken.
+        private static readonly Vector3 FallbackSlot =
+            TheOtherRoles.Objects.CustomButton.ButtonPositions.highRowRight + new Vector3(0f, 0.6f, 0f);
+        private const float SlotEps = 0.25f;
 
         public static void Postfix(HudManager __instance) {
             if (__instance == null || __instance.ImpostorVentButton == null || __instance.UseButton == null) return;
@@ -847,11 +869,29 @@ namespace TOR_ChanceModifier {
             var vb = __instance.ImpostorVentButton;
             if (!vb.isActiveAndEnabled) return;
 
-            // Anchor to the use button and lift the vent button above the whole ability cluster.
-            // World-space so it's independent of which transform parent each button lives under;
+            // Collect the offsets of the role's currently-active ability buttons. Mirrored buttons sit
+            // on the far right (outside the left cluster) and never collide with our candidate slots.
+            var occupied = new List<Vector3>();
+            foreach (var b in TheOtherRoles.Objects.CustomButton.buttons) {
+                if (b == null || b.mirror) continue;
+                if (b.actionButtonGameObject == null || !b.actionButtonGameObject.activeSelf) continue;
+                occupied.Add(b.PositionOffset);
+            }
+
+            // First candidate slot no active ability button occupies; fallback above everything.
+            Vector3 chosen = FallbackSlot;
+            foreach (var slot in CandidateSlots) {
+                bool free = true;
+                foreach (var o in occupied) {
+                    if (Mathf.Abs(o.x - slot.x) < SlotEps && Mathf.Abs(o.y - slot.y) < SlotEps) { free = false; break; }
+                }
+                if (free) { chosen = slot; break; }
+            }
+
+            // Anchor to the use button in world space (independent of each button's transform parent);
             // z one unit forward keeps the collider clickable even if anything else lines up.
             Vector3 u = __instance.UseButton.transform.position;
-            vb.transform.position = new Vector3(u.x, u.y + VentYOffset, u.z - 1f);
+            vb.transform.position = new Vector3(u.x + chosen.x, u.y + chosen.y, u.z - 1f);
         }
     }
 
@@ -899,19 +939,27 @@ namespace TOR_ChanceModifier {
     }
 
     // ---------------------------------------------------------------------------
-    // Patch 12: Sabotage cooldown — lower the (team-shared) sabotage timer so a Chance
-    // impostor's rolled value acts as a real cooldown reduction.
+    // Patch 12: Sabotage cooldown — drive the (team-shared) sabotage timer to a Chance
+    // impostor's rolled value, so the value acts as a real cooldown both DOWN (reduction)
+    // and UP (extension).
     //
     // Vanilla validates a sabotage in SabotageSystemType.UpdateSystem against the shared
-    // timer, and that check runs on the HOST. So clamping only the local timer unlocks the
+    // timer, and that check runs on the HOST. So changing only the local timer unlocks the
     // button on a remote client's UI but the host still rejects the early sabotage. We
-    // therefore clamp in two places:
-    //   • Local UI: lower the locally-read timer for the local Chance impostor so the
-    //     sabotage button unlocks on time on this client.
-    //   • Host authority: lower the shared timer to the smallest rolled cooldown among
-    //     alive Chance impostors so the host's UpdateSystem validation passes for them.
+    // therefore act in two places:
+    //   • Local UI: each client uses its OWN local Chance impostor's rolled value, so the
+    //     sabotage button reflects that player's cooldown on this client.
+    //   • Host authority: uses the MAXIMUM rolled cooldown among alive Chance impostors so
+    //     the host's UpdateSystem validation matches the longest cooldown.
     // The timer is team-shared (vanilla has no per-player sabotage cooldown), so the host
-    // clamp uses the minimum — consistent with that approximation.
+    // uses the maximum — consistent with that approximation.
+    //
+    // Reduction vs extension: this patch runs every frame in HudManager.Update. Clamping the
+    // running timer UP every frame would re-raise it forever and it would never reach 0
+    // (sabotage permanently locked). So we ONLY raise the timer at the start of a fresh
+    // cooldown cycle, detected via an upward jump of the shared timer between frames (round
+    // start, after a meeting, after a sabotage ends). Reduction stays a safe continuous
+    // downward clamp. This avoids depending on any vanilla-internal reset value.
     // ---------------------------------------------------------------------------
     [HarmonyPatch(typeof(HudManager), nameof(HudManager.Update))]
     static class ChanceSabotageCooldownPatch {
@@ -933,16 +981,26 @@ namespace TOR_ChanceModifier {
                 }
 
                 if (AmongUsClient.Instance != null && AmongUsClient.Instance.AmHost) {
+                    float? maxCd = null;
                     foreach (var kv in Chance.sabotageCdMod) {
                         if (!Chance.isChance(kv.Key)) continue;
                         var p = Helpers.playerById(kv.Key);
                         if (p == null || p.Data == null || p.Data.IsDead
                             || p.Data.Role == null || !p.Data.Role.IsImpostor) continue;
-                        if (targetCd == null || kv.Value < targetCd.Value) targetCd = kv.Value;
+                        if (maxCd == null || kv.Value > maxCd.Value) maxCd = kv.Value;
                     }
+                    if (maxCd.HasValue) targetCd = maxCd; // host authority uses the maximum
                 }
 
-                if (targetCd.HasValue && sab.Timer > targetCd.Value) sab.Timer = targetCd.Value;
+                float now = sab.Timer;
+                bool freshCycle = Chance.lastSabTimer >= 0f
+                    ? now > Chance.lastSabTimer + Chance.SabEdgeEps
+                    : now > Chance.SabEdgeEps;
+                if (targetCd.HasValue) {
+                    if (now > targetCd.Value) sab.Timer = targetCd.Value;                    // reduction (continuous, safe)
+                    else if (freshCycle && now < targetCd.Value) sab.Timer = targetCd.Value; // extension (only at cycle start)
+                }
+                Chance.lastSabTimer = sab.Timer; // remember post-value so the next upward jump is detected correctly
             } catch { }
         }
     }
