@@ -18,7 +18,7 @@ using UnityEngine;
 using Types = TheOtherRoles.CustomOption.CustomOptionType;
 
 namespace TOR_ChanceModifier {
-    [BepInPlugin(Id, "TOR Chance Modifier", VersionString)]
+    [BepInPlugin(Id, "TOR - Unknown Chaos", VersionString)]
     [BepInDependency("me.eisbison.theotherroles")]
     [BepInProcess("Among Us.exe")]
     public class ChancePlugin : BasePlugin {
@@ -41,7 +41,7 @@ namespace TOR_ChanceModifier {
             try {
                 var modData = new System.Collections.Generic.Dictionary<string, object> {
                     { "Guid", Id },
-                    { "Name", "Chance Modifier" },
+                    { "Name", "TOR - Unknown Chaos" },
                     { "Version", Version },
                     { "RepositoryOwner", "DaUnknown-0" },
                     { "RepositoryName", "TOR-Chance" },
@@ -222,7 +222,7 @@ namespace TOR_ChanceModifier {
             }
 
             // Clickable mod name, inserted just below the "TheOtherRoles vX" line.
-            string chanceLine = $"<link=\"chanceCredits\"><color=#FF8C00>Chance Modifier</color> v{ChancePlugin.Version}</link>";
+            string chanceLine = $"<link=\"chanceCredits\"><color=#FF8C00>TOR - Unknown Chaos</color> v{ChancePlugin.Version}</link>";
             int nl = text.IndexOf('\n');
             text = nl >= 0
                 ? text.Substring(0, nl + 1) + chanceLine + "\n" + text.Substring(nl + 1)
