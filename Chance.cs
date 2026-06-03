@@ -1029,9 +1029,13 @@ namespace TOR_ChanceModifier {
             }
         }
 
-        public static void Postfix(MeetingHud __instance, ref Dictionary<byte, int> __result) {
-            if (__result == null || __instance == null || !Chance.IsActive()) return;
-            var states = __instance.playerStates;
+        // CalculateVotes is a STATIC method whose first parameter is named "__instance".
+        // Harmony reserves "__instance" for the declaring-type instance (null on static methods),
+        // so it would NOT map to that argument — we must grab the MeetingHud via the positional
+        // injection "__0" instead, otherwise it is always null and the multiplier never applies.
+        public static void Postfix(MeetingHud __0, ref Dictionary<byte, int> __result) {
+            if (__result == null || __0 == null || !Chance.IsActive()) return;
+            var states = __0.playerStates;
             if (states == null) return;
             for (int i = 0; i < states.Length; i++) {
                 var pva = states[i];
