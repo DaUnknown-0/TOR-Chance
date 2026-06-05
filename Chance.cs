@@ -92,8 +92,6 @@ namespace TOR_ChanceModifier {
         private static bool meetingEndedThisMeeting;
         private static bool rangeSyncInProgress;
         private static bool isActive;
-        private static bool activationSoundPlayed;
-        private static AudioClip activationSoundClip;
         private static float reportCheckTimer;
 
         // Last observed shared sabotage timer; a jump UP between frames marks a fresh cooldown cycle.
@@ -117,7 +115,6 @@ namespace TOR_ChanceModifier {
             activationStartTime = -1f;
             meetingEndedThisMeeting = false;
             rangeSyncInProgress = false;
-            activationSoundPlayed = false;
             isActive = false;
             reportCheckTimer = 0f;
             lastSabTimer = -1f;
@@ -272,72 +269,6 @@ namespace TOR_ChanceModifier {
             if (isActive) return;
             if (!HasChanceModifier()) return;
             isActive = true;
-            PlayActivationSound();
-        }
-
-        private static void PlayActivationSound() {
-            if (activationSoundPlayed) return;
-            activationSoundPlayed = true;
-            if (!Constants.ShouldPlaySfx()) return;
-
-            if (activationSoundClip == null) {
-                activationSoundClip = BuildActivationSound();
-            }
-
-            if (activationSoundClip != null && SoundManager.Instance != null) {
-                SoundManager.Instance.PlaySound(activationSoundClip, false, 0.55f);
-            }
-        }
-
-        private static AudioClip BuildActivationSound() {
-            const int sampleRate = 44100;
-            const float duration = 0.58f;
-            int sampleCount = Mathf.CeilToInt(sampleRate * duration);
-            float[] samples = new float[sampleCount];
-
-            float Hash(float value) {
-                float x = Mathf.Sin(value * 127.1f + 311.7f) * 43758.5453f;
-                return x - Mathf.Floor(x);
-            }
-
-            for (int i = 0; i < sampleCount; i++) {
-                float time = i / (float)sampleRate;
-                float progress = time / duration;
-
-                float attack = Mathf.Clamp01(time / 0.02f);
-                float release = Mathf.Clamp01((duration - time) / 0.14f);
-                float envelope = attack * attack * (3f - 2f * attack) * release * release * (3f - 2f * release);
-
-                float gate;
-                if (time < 0.18f) {
-                    gate = ((int)(time * 42f) % 3 == 0) ? 1f : 0.2f;
-                } else if (time < 0.4f) {
-                    gate = ((int)(time * 28f) % 2 == 0) ? 1f : 0.35f;
-                } else {
-                    gate = 1f;
-                }
-
-                float tone = Mathf.Sin(2f * Mathf.PI * (760f + 220f * Mathf.Sin(2f * Mathf.PI * 3.5f * time)) * time);
-                tone += Mathf.Sin(2f * Mathf.PI * (1520f + 90f * Mathf.Sin(2f * Mathf.PI * 7.1f * time)) * time) * 0.55f;
-                tone += Mathf.Sin(2f * Mathf.PI * (2280f + 140f * progress) * time) * 0.25f;
-
-                float glitchBurstA = Mathf.Clamp01(1f - Mathf.Abs((time - 0.08f) / 0.06f));
-                float glitchBurstB = Mathf.Clamp01(1f - Mathf.Abs((time - 0.31f) / 0.05f));
-                float glitchBurstC = Mathf.Clamp01(1f - Mathf.Abs((time - 0.47f) / 0.07f));
-
-                float noise = (Hash(time * 1000f) * 2f - 1f) * (glitchBurstA * 0.95f + glitchBurstB * 0.65f + glitchBurstC * 0.8f);
-                float chirp = Mathf.Sin(2f * Mathf.PI * (900f + 2600f * progress * progress) * time) * 0.5f;
-
-                float sample = (tone * 0.34f + chirp * 0.16f + noise * 0.14f) * gate * envelope;
-                sample = Mathf.Clamp(sample, -1f, 1f);
-                sample = Mathf.Round(sample * 64f) / 64f;
-                samples[i] = sample * 0.85f;
-            }
-
-            AudioClip clip = AudioClip.Create("ChanceActivationGlitch", sampleCount, 1, sampleRate, false);
-            clip.SetData(new Il2CppStructArray<float>(samples), 0);
-            clip.hideFlags |= HideFlags.HideAndDontSave | HideFlags.DontSaveInEditor;
-            return clip;
         }
 
         public static void AssignChancePlayers() {
@@ -1024,18 +955,28 @@ namespace TOR_ChanceModifier {
                     return;
                 }
                 harmony.Patch(method, postfix: new HarmonyMethod(typeof(ChanceVoteMultiplierPatch), nameof(Postfix)));
+                ChancePlugin.Logger?.LogInfo("[Chance] Vote multiplier: CalculateVotes postfix patch applied.");
             } catch (Exception e) {
                 ChancePlugin.Logger?.LogError($"[Chance] Vote multiplier patch failed: {e}");
             }
         }
 
+        // Temporary diagnostics: confirm at runtime whether this postfix actually runs and what it
+        // sees. Remove once the vote multiplier is verified working in-game.
+        internal static bool DebugVotes = true;
+
         // CalculateVotes is a STATIC method whose first parameter is named "__instance".
         // Harmony reserves "__instance" for the declaring-type instance (null on static methods),
-        // so it would NOT map to that argument — we must grab the MeetingHud via the positional
-        // injection "__0" instead, otherwise it is always null and the multiplier never applies.
+        // so it would NOT map to that argument — we grab the MeetingHud via the positional injection
+        // "__0", falling back to MeetingHud.Instance so a null "__0" can't silently disable the
+        // multiplier (the actual cause of x0/x2/x3 not affecting the count).
         public static void Postfix(MeetingHud __0, ref Dictionary<byte, int> __result) {
-            if (__result == null || __0 == null || !Chance.IsActive()) return;
-            var states = __0.playerStates;
+            var hud = __0 ?? MeetingHud.Instance;
+            bool active = Chance.IsActive();
+            if (DebugVotes)
+                ChancePlugin.Logger?.LogInfo($"[Chance] vote postfix: fired (hud={(hud != null)}, __0={(__0 != null)}, active={active}, result={(__result != null)}).");
+            if (__result == null || hud == null || !active) return;
+            var states = hud.playerStates;
             if (states == null) return;
             for (int i = 0; i < states.Length; i++) {
                 var pva = states[i];
@@ -1048,11 +989,63 @@ namespace TOR_ChanceModifier {
 
                 int baseVotes = (Mayor.mayor != null && Mayor.mayor.PlayerId == voterId && Mayor.voteTwice) ? 2 : 1;
                 int delta = mult - baseVotes;
+                if (DebugVotes) {
+                    int before = __result.TryGetValue(votedFor, out int c) ? c : 0;
+                    ChancePlugin.Logger?.LogInfo($"[Chance] vote postfix: voter={voterId} votedFor={votedFor} mult={mult} base={baseVotes} delta={delta} before={before}.");
+                }
                 if (delta == 0) continue;
                 if (__result.TryGetValue(votedFor, out int cur))
                     __result[votedFor] = Math.Max(0, cur + delta);
                 else if (delta > 0)
                     __result[votedFor] = delta;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Patch 14: Vote multiplier DISPLAY — rewrite the VoterState[] that TOR's
+    // PopulateResults draws its vote icons from, so the icon count matches the
+    // multiplied tally (x0 → no icon, x2/x3 → extra icons). Runs as a Priority.First
+    // prefix so TOR's own MeetingHudPopulateVotesPatch.Prefix already sees the
+    // rewritten array. Only Chance voters are touched; every other entry is copied
+    // unchanged. The multiplier is applied relative to the Mayor double-vote baseline
+    // (same delta as the count), so Mayor + Chance combos aren't double-counted.
+    // ---------------------------------------------------------------------------
+    [HarmonyPatch(typeof(MeetingHud), nameof(MeetingHud.PopulateResults))]
+    [HarmonyPriority(Priority.First)]
+    static class ChanceVoteMultiplierDisplayPatch {
+        static void Prefix(ref Il2CppStructArray<MeetingHud.VoterState> states) {
+            try {
+                if (states == null || !Chance.IsActive()) return;
+
+                var rebuilt = new List<MeetingHud.VoterState>(states.Length);
+                for (int i = 0; i < states.Length; i++) {
+                    MeetingHud.VoterState vs = states[i];
+                    byte votedFor = (byte)vs.VotedForId;
+                    byte voterId = (byte)vs.VoterId;
+
+                    // Default: copy the entry as-is (one icon). Skip codes TOR/Chance never multiply
+                    // (no-vote / dead) — mirrors the count postfix exclusions.
+                    int entries = 1;
+                    bool multiplied = votedFor != 252 && votedFor != 254 && votedFor != 255;
+                    if (multiplied && Chance.IsChancePlayer(voterId)
+                        && Chance.voteMultiplierMod.TryGetValue(voterId, out byte mult)) {
+                        int mayorBase = (Mayor.mayor != null && Mayor.mayor.PlayerId == voterId && Mayor.voteTwice) ? 2 : 1;
+                        // TOR draws `mayorBase` icons from a single entry (the Mayor's j-- doubles it);
+                        // each additional entry adds one icon, zero entries draws nothing.
+                        if (mult <= 0) entries = 0;
+                        else if (mayorBase == 2) entries = Math.Max(1, mult - 1); // mult==1 edge: shows 2 (tally says 1)
+                        else entries = mult;
+                    }
+
+                    for (int k = 0; k < entries; k++) rebuilt.Add(vs);
+                }
+
+                var arr = new Il2CppStructArray<MeetingHud.VoterState>(rebuilt.Count);
+                for (int i = 0; i < rebuilt.Count; i++) arr[i] = rebuilt[i];
+                states = arr;
+            } catch (Exception e) {
+                ChancePlugin.Logger?.LogError($"[Chance] Vote multiplier display patch failed: {e}");
             }
         }
     }
