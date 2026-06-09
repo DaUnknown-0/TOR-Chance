@@ -12,7 +12,7 @@ This mod is not affiliated with Among Us or Innersloth LLC, and the content cont
   - Kill cooldown (configurable min/max range)
   - Vision radius (configurable min/max range)
   - Task count (configurable min/max range)
-  - Vote multiplier (0–3 votes; configurable min/max range)
+  - Extra votes (0–3 additional votes added on top of the normal vote; configurable min/max range)
   - Kill distance (configurable min/max range)
   - Sabotage cooldown (impostors only; configurable min/max range)
 - **Kill Success Chance**: when a Chance player kills, the kill only goes through with the configured probability

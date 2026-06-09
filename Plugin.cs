@@ -185,6 +185,9 @@ namespace TOR_ChanceModifier {
             // Vote multiplier targets a private nested TOR method, so it is patched manually
             // (isolated from PatchAll so a lookup failure can't abort the other patches).
             ChanceVoteMultiplierPatch.TryPatch(Harmony);
+            // Vote DISPLAY likewise wraps TOR's nested PopulateVotes prefix directly, so the
+            // rewritten VoterState[] is guaranteed to reach the icon renderer.
+            ChanceVoteMultiplierDisplayPatch.TryPatch(Harmony);
 
             AddComponent<ChanceModUpdater>();
         }

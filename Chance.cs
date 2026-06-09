@@ -1004,16 +1004,48 @@ namespace TOR_ChanceModifier {
 
     // ---------------------------------------------------------------------------
     // Patch 14: Vote multiplier DISPLAY — rewrite the VoterState[] that TOR's
-    // PopulateResults draws its vote icons from, so the icon count matches the
-    // multiplied tally (x0 → no icon, x2/x3 → extra icons). Runs as a Priority.First
-    // prefix so TOR's own MeetingHudPopulateVotesPatch.Prefix already sees the
-    // rewritten array. Only Chance voters are touched; every other entry is copied
-    // unchanged. The multiplier is applied relative to the Mayor double-vote baseline
-    // (same delta as the count), so Mayor + Chance combos aren't double-counted.
+    // PopulateResults prefix draws its vote icons from, so the icon count matches
+    // the multiplied tally (x0 → no icon, x2/x3 → extra icons).
+    //
+    // Patched manually (see ChancePlugin.Load) onto TOR's own managed
+    // MeetingHudPopulateVotesPatch.Prefix — the same technique as the CalculateVotes
+    // count patch above. The previous attribute patch was a Priority.First prefix on
+    // the IL2CPP method MeetingHud.PopulateResults and relied on (a) cross-instance
+    // prefix ordering and (b) ref-arg propagation through the Il2CppInterop layer;
+    // when TOR's prefix ran first it drew the icons from the original array and
+    // returned false, so the rewrite was never seen and no extra icons appeared.
+    // Wrapping TOR's renderer directly removes both failure points. If the nested
+    // type isn't found (TOR refactor), falls back to the old PopulateResults prefix.
+    //
+    // Only Chance voters are touched; every other entry is copied unchanged. The
+    // multiplier is applied relative to the Mayor double-vote baseline (same delta
+    // as the count), so Mayor + Chance combos aren't double-counted.
     // ---------------------------------------------------------------------------
-    [HarmonyPatch(typeof(MeetingHud), nameof(MeetingHud.PopulateResults))]
-    [HarmonyPriority(Priority.First)]
     static class ChanceVoteMultiplierDisplayPatch {
+        public static void TryPatch(HarmonyLib.Harmony harmony) {
+            try {
+                var t = typeof(TheOtherRoles.TheOtherRoles).Assembly
+                    .GetType("TheOtherRoles.Patches.MeetingHudPatch+MeetingHudPopulateVotesPatch");
+                var method = t == null ? null : AccessTools.Method(t, "Prefix");
+                if (method != null) {
+                    harmony.Patch(method, prefix: new HarmonyMethod(typeof(ChanceVoteMultiplierDisplayPatch), nameof(Prefix)));
+                    ChancePlugin.Logger?.LogInfo("[Chance] Vote display: TOR PopulateResults renderer wrapped.");
+                    return;
+                }
+                ChancePlugin.Logger?.LogWarning("[Chance] Vote display: TOR renderer not found, falling back to MeetingHud.PopulateResults prefix.");
+                harmony.Patch(
+                    AccessTools.Method(typeof(MeetingHud), nameof(MeetingHud.PopulateResults)),
+                    prefix: new HarmonyMethod(typeof(ChanceVoteMultiplierDisplayPatch), nameof(Prefix)) { priority = Priority.First });
+            } catch (Exception e) {
+                ChancePlugin.Logger?.LogError($"[Chance] Vote display patch failed: {e}");
+            }
+        }
+
+        // Rewrites the `states` argument before TOR's renderer body runs — a plain
+        // managed Harmony ref-argument edit, so TOR is guaranteed to draw from the
+        // rebuilt array. The Mayor branch matches TOR's draw loop: TOR redoes the
+        // Mayor's FIRST entry once (j--), so with `entries` duplicates the icon
+        // total is entries + 1.
         static void Prefix(ref Il2CppStructArray<MeetingHud.VoterState> states) {
             try {
                 if (states == null || !Chance.IsActive()) return;
@@ -1043,6 +1075,10 @@ namespace TOR_ChanceModifier {
 
                 var arr = new Il2CppStructArray<MeetingHud.VoterState>(rebuilt.Count);
                 for (int i = 0; i < rebuilt.Count; i++) arr[i] = rebuilt[i];
+
+                if (ChanceVoteMultiplierPatch.DebugVotes)
+                    ChancePlugin.Logger?.LogInfo($"[Chance] vote display: fired, states {states.Length} → {rebuilt.Count}.");
+
                 states = arr;
             } catch (Exception e) {
                 ChancePlugin.Logger?.LogError($"[Chance] Vote multiplier display patch failed: {e}");
