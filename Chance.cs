@@ -1049,8 +1049,18 @@ namespace TOR_ChanceModifier {
                     ChancePlugin.Logger?.LogInfo($"[Chance] vote postfix: voter={voterId} votedFor={votedFor} mult={mult} base={baseVotes} delta={delta} before={before}.");
                 }
                 if (delta == 0) continue;
-                if (__result.TryGetValue(votedFor, out int cur))
-                    __result[votedFor] = Math.Max(0, cur + delta);
+                if (__result.TryGetValue(votedFor, out int cur)) {
+                    int next = Math.Max(0, cur + delta);
+                    // Auf 0 reduzierte Einträge ENTFERNEN statt mit Wert 0 stehen zu lassen:
+                    // TORs MaxPair startet bei int.MinValue, ein 0-Eintrag gewinnt also als
+                    // "Maximum" ohne tie und der Spieler würde mit 0 Stimmen exiliert. Ohne
+                    // Eintrag verhält es sich wie "niemand hat ihn gevotet". Sicher, weil der
+                    // Count nur 0 erreicht, wenn ALLE Voter dieses Ziels x0 waren (jedes x0-Delta
+                    // entfernt exakt die eigene Base-Stimme) — ein späteres positives Delta auf
+                    // denselben Eintrag kann in dieser Schleife nicht mehr folgen.
+                    if (next == 0) __result.Remove(votedFor);
+                    else __result[votedFor] = next;
+                }
                 else if (delta > 0)
                     __result[votedFor] = delta;
             }
