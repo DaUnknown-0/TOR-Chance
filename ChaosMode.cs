@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using HarmonyLib;
 using Hazel;
+using UnityEngine;
 using TheOtherRoles;
 using static TheOtherRoles.TheOtherRoles;
 
@@ -284,6 +285,9 @@ namespace TOR_ChanceModifier {
         public static List<string> GetHistory(byte playerId) {
             return roleHistory.TryGetValue(playerId, out var list) ? list : null;
         }
+
+        // Read-only Zugriff für den Summary-Trim-Patch (Zeilen am Bildschirmrand kürzen).
+        internal static Dictionary<byte, List<string>> AllHistories => roleHistory;
     }
 
     [HarmonyPatch(typeof(MeetingHud), nameof(MeetingHud.Start))]
@@ -319,6 +323,87 @@ namespace TOR_ChanceModifier {
             var hist = ChaosMode.GetHistory(p.PlayerId);
             if (hist == null || hist.Count <= 1) return;
             __result = string.Join(" → ", hist.ToArray());
+        }
+    }
+
+    // Kürzt zu lange Rollen-Verläufe im End-Screen-Role-Summary auf "... → letzte N Rollen".
+    // Das Summary ist ein World-Space-TMP ohne Overflow-Behandlung (TOR EndGamePatch): Zeilen,
+    // die breiter als der Bildschirm sind, laufen unsichtbar über den Rand. N ist hier nicht
+    // fix, sondern ergibt sich pro Client aus der echten Bildschirmbreite: jede Verlaufszeile
+    // wird mit dem tatsächlichen TMP gemessen (GetPreferredValues rechnet mit dessen Font und
+    // Schriftgröße und ignoriert Rich-Text-Tags) und von VORNE gekürzt, bis sie passt — die
+    // letzte (finale) Rolle bleibt immer stehen. Breitere Bildschirme zeigen also mehr Rollen.
+    // Priority.Low: läuft nach TORs SetEverythingUp-Postfix, das das Summary-Objekt erst baut.
+    [HarmonyPatch(typeof(EndGameManager), nameof(EndGameManager.SetEverythingUp))]
+    [HarmonyPriority(Priority.Low)]
+    static class ChaosHistorySummaryTrimPatch {
+        private const string SummaryMarker = "Players and roles at the end of the game:";
+
+        public static void Postfix() {
+            try {
+                var histories = ChaosMode.AllHistories;
+                if (histories.Count == 0) return;
+                if (!histories.Values.Any(h => h != null && h.Count > 1)) return;
+
+                // Das von TOR per Instantiate(WinText) erzeugte Summary-TMP über seinen festen
+                // Kopftext finden (TOR hält keine Referenz darauf, die wir lesen könnten).
+                TMPro.TMP_Text summary = null;
+                foreach (var t in UnityEngine.Object.FindObjectsOfType<TMPro.TMP_Text>()) {
+                    if (t != null && t.text != null && t.text.Contains(SummaryMarker)) { summary = t; break; }
+                }
+                if (summary == null) return; // Role-Summary deaktiviert oder TOR-Layout geändert
+
+                var cam = Camera.main;
+                if (cam == null) return;
+                float rightX = cam.ViewportToWorldPoint(new Vector3(1f, 1f, cam.nearClipPlane)).x;
+
+                // Linke Weltkante des Text-Rects: bei TopLeft-Alignment beginnt dort jede Zeile.
+                var corners = new Il2CppStructArray<Vector3>(4);
+                summary.rectTransform.GetWorldCorners(corners);
+                float available = rightX - corners[0].x - 0.15f; // kleiner Sicherheitsrand
+                if (available <= 1f) return;
+
+                // Wrapping deterministisch aus: die Wrap-Einstellung wäre sonst vom Vanilla-
+                // WinText-Prefab geerbt; nach dem Kürzen passt ohnehin jede Zeile in eine Zeile.
+                summary.enableWordWrapping = false;
+
+                var chains = histories.Values.Where(h => h != null && h.Count > 1).ToList();
+                string[] lines = summary.text.Split('\n');
+                bool changed = false;
+
+                for (int i = 0; i < lines.Length; i++) {
+                    string line = lines[i];
+                    if (!line.Contains(" → ")) continue;
+                    if (summary.GetPreferredValues(line).x <= available) continue;
+
+                    // Die Verlaufskette dieser Zeile exakt über ihren von uns erzeugten String
+                    // wiederfinden (kein fragiles Parsen von Spielername/Task-Suffix nötig).
+                    foreach (var hist in chains) {
+                        string full = string.Join(" → ", hist.ToArray());
+                        if (!line.Contains(full)) continue;
+                        for (int keep = hist.Count - 1; keep >= 1; keep--) {
+                            string reduced = "... → " + string.Join(" → ", hist.Skip(hist.Count - keep).ToArray());
+                            string candidate = line.Replace(full, reduced);
+                            if (keep == 1 || summary.GetPreferredValues(candidate).x <= available) {
+                                lines[i] = candidate;
+                                changed = true;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                if (changed) {
+                    string newText = string.Join("\n", lines);
+                    summary.text = newText;
+                    // Lobby-Nachanzeige (Summary-Button) speist sich aus diesem Feld; dort schneidet
+                    // TOR lange Zeilen ebenfalls ab (enableWordWrapping=false), also gekürzt halten.
+                    Helpers.previousEndGameSummary = $"<size=110%>{newText}</size>";
+                }
+            } catch (Exception e) {
+                ChancePlugin.Logger?.LogError($"[Chaos] end-game summary trim failed: {e}");
+            }
         }
     }
 }
