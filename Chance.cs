@@ -62,6 +62,11 @@ namespace TOR_ChanceModifier {
         public const int RoleIdValue = 58;   // Value after Shifter (57)
 
         public static List<PlayerControl> chanceList = new List<PlayerControl>();
+        // P2.1: Spiegelt die PlayerIds aus chanceList als HashSet. IsChancePlayer wird per Frame und
+        // Spieler aus PlayerPhysics.FixedUpdate, CalculateLightRadius, HudManager.Update und der
+        // Kill-Target-Neuwahl aufgerufen — eine O(1)-Set-Prüfung ersetzt das O(n)-chanceList.Any(...).
+        // Wird in applyValues/CleanChancePlayers/clearAndReload synchron mit chanceList gepflegt.
+        public static HashSet<byte> chanceIds = new HashSet<byte>();
         public static Dictionary<byte, float> speedMod        = new Dictionary<byte, float>();
         public static Dictionary<byte, float> cooldownMod     = new Dictionary<byte, float>();
         public static Dictionary<byte, float> visionMod       = new Dictionary<byte, float>();
@@ -100,6 +105,7 @@ namespace TOR_ChanceModifier {
 
         public static void clearAndReload() {
             chanceList   = new List<PlayerControl>();
+            chanceIds    = new HashSet<byte>();
             speedMod     = new Dictionary<byte, float>();
             cooldownMod  = new Dictionary<byte, float>();
             visionMod    = new Dictionary<byte, float>();
@@ -207,7 +213,7 @@ namespace TOR_ChanceModifier {
         }
 
         public static bool IsChancePlayer(byte playerId) {
-            return IsActive() && chanceList.Any(x => x.PlayerId == playerId);
+            return IsActive() && chanceIds.Contains(playerId);
         }
 
         public static bool TryActivate() {
@@ -378,8 +384,10 @@ namespace TOR_ChanceModifier {
 
         public static void applyValues(byte id, ChanceRoll roll) {
             var p = Helpers.playerById(id);
-            if (p != null && p.Data != null && !p.Data.Disconnected && !p.Data.IsDead && !chanceList.Any(x => x.PlayerId == id))
+            if (p != null && p.Data != null && !p.Data.Disconnected && !p.Data.IsDead && !chanceList.Any(x => x.PlayerId == id)) {
                 chanceList.Add(p);
+                chanceIds.Add(id);
+            }
             speedMod[id]          = roll.speed;
             cooldownMod[id]       = roll.cooldown;
             visionMod[id]         = roll.vision;
@@ -403,6 +411,7 @@ namespace TOR_ChanceModifier {
             chanceList.RemoveAll(p => p == null || p.Data == null || p.Data.Disconnected || p.Data.IsDead);
 
             foreach (byte id in removedIds) {
+                chanceIds.Remove(id);
                 speedMod.Remove(id);
                 cooldownMod.Remove(id);
                 visionMod.Remove(id);
@@ -586,11 +595,21 @@ namespace TOR_ChanceModifier {
         }
     }
 
-    [HarmonyPatch(typeof(MeetingHud), nameof(MeetingHud.Close))]
-    static class ChanceMeetingEndedPatch {
-        public static void Postfix() {
-            Chance.OnMeetingEnded();
-        }
+    // P1.6: Re-Randomisierung an dieselben Exile-WrapUp-Hooks wie ChaosMode hängen, NICHT an
+    // MeetingHud.Close. Close feuert VOR der Exile-Cutscene — dort gilt der gerade rausgewählte
+    // Spieler noch als lebend (!Data.IsDead), sodass der Host eine RPC an einen gleich sterbenden
+    // Spieler verschwendete und das Meeting-Counting subtil von Chaos abwich. WrapUp läuft NACH
+    // dem Tod des Exilierten; Unentschieden/Skip durchlaufen den Exile-Controller ohne Opfer, also
+    // feuern diese Hooks in allen normalen Pfaden. Der meetingEndedThisMeeting-Guard verhindert
+    // Doppelausführung, falls beide Controller-Typen je auftreten.
+    [HarmonyPatch(typeof(ExileController), nameof(ExileController.WrapUp))]
+    static class ChanceExileWrapUpPatch {
+        public static void Postfix() => Chance.OnMeetingEnded();
+    }
+
+    [HarmonyPatch(typeof(AirshipExileController), nameof(AirshipExileController.WrapUpAndSpawn))]
+    static class ChanceAirshipExileWrapUpPatch {
+        public static void Postfix() => Chance.OnMeetingEnded();
     }
 
     // ---------------------------------------------------------------------------
@@ -599,8 +618,21 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(PlayerControl), nameof(PlayerControl.HandleRpc))]
     [HarmonyPriority(Priority.High)]
     static class ChanceHandleRpcPatch {
-        public static bool Prefix(byte callId, MessageReader reader) {
+        // RPCs 200 (SetValues), 201 (ChaosReassign) und 250 (Activation) sind host-autoritativ:
+        // sie re-rollen Rollen/Stats für ALLE Spieler bzw. setzen Kill-Cooldowns. Würden sie von
+        // jedem Client akzeptiert, könnte ein modifizierter Client beliebig Rollen würfeln, sich
+        // Vents geben oder fremde Cooldowns nullen (P0.3). Daher nur vom Host annehmen.
+        // RPC 251 (Version-Handshake) bleibt bewusst für ALLE Clients offen — das ist sein Zweck.
+        static bool IsFromHost(PlayerControl sender) =>
+            sender != null && AmongUsClient.Instance != null
+            && sender.OwnerId == AmongUsClient.Instance.HostId;
+
+        public static bool Prefix(byte callId, MessageReader reader, PlayerControl __instance) {
             if (callId == Chance.RpcId) {
+                if (!IsFromHost(__instance)) {
+                    ChancePlugin.Logger?.LogWarning($"[Chance] Rejected host-only RPC {callId} (SetValues) from non-host sender {__instance?.PlayerId.ToString() ?? "?"} (owner {__instance?.OwnerId.ToString() ?? "?"}).");
+                    return false;  // RPC konsumieren, damit TORs switch die ID nicht sieht
+                }
                 try {
                     byte pid = reader.ReadByte();
                     Chance.ChanceRoll roll = new Chance.ChanceRoll();
@@ -618,6 +650,10 @@ namespace TOR_ChanceModifier {
             }
 
             if (callId == Chance.ChaosRpcId) {
+                if (!IsFromHost(__instance)) {
+                    ChancePlugin.Logger?.LogWarning($"[Chance] Rejected host-only RPC {callId} (ChaosReassign) from non-host sender {__instance?.PlayerId.ToString() ?? "?"} (owner {__instance?.OwnerId.ToString() ?? "?"}).");
+                    return false;
+                }
                 try {
                     byte pid = reader.ReadByte();
                     byte rid = reader.ReadByte();
@@ -630,11 +666,16 @@ namespace TOR_ChanceModifier {
             }
 
             if (callId == Chance.ActivationRpcId) {
+                if (!IsFromHost(__instance)) {
+                    ChancePlugin.Logger?.LogWarning($"[Chance] Rejected host-only RPC {callId} (Activation) from non-host sender {__instance?.PlayerId.ToString() ?? "?"} (owner {__instance?.OwnerId.ToString() ?? "?"}).");
+                    return false;
+                }
                 Chance.ReceiveActivation();
                 return false;
             }
 
             if (callId == Chance.VersionHandshakeRpcId) {
+                // Handshake — bewusst von allen Clients akzeptiert (keine Host-Prüfung).
                 try { ChanceVersionHandshake.ReceiveRpc(reader); } catch { }
                 return false;
             }
@@ -741,8 +782,13 @@ namespace TOR_ChanceModifier {
         public static void Postfix(PlayerControl __instance) {
             if (!Chance.isChance(__instance.PlayerId)) return;
             if (!Chance.cooldownMod.TryGetValue(__instance.PlayerId, out float cd)) return;
+            // Das Clampen des killTimer gilt für jede Chance-Instanz; das HUD-Kill-Button gehört
+            // aber nur dem LOKALEN Spieler. SetKillTimer wird von TOR auch für fremde Spieler
+            // aufgerufen — ohne AmOwner-Gate zeigte der eigene Button fremde Cooldowns an und
+            // NRE'te vor HUD-Existenz (P1.3).
             __instance.killTimer = Mathf.Clamp(__instance.killTimer, 0f, cd);
-            FastDestroyableSingleton<HudManager>.Instance.KillButton.SetCoolDown(__instance.killTimer, cd);
+            if (__instance.AmOwner && HudManager.Instance != null)
+                HudManager.Instance.KillButton.SetCoolDown(__instance.killTimer, cd);
         }
     }
 
@@ -789,6 +835,10 @@ namespace TOR_ChanceModifier {
             TheOtherRoles.Objects.CustomButton.ButtonPositions.highRowRight + new Vector3(0f, 0.6f, 0f);
         private const float SlotEps = 0.25f;
 
+        // P2.2: Wiederverwendbare Liste statt einer Allokation pro Frame. Dieser Postfix läuft auf
+        // dem Unity-Main-Thread (HudManager.Update), daher ist ein geteiltes statisches Feld sicher.
+        private static readonly List<Vector3> occupied = new List<Vector3>();
+
         public static void Postfix(HudManager __instance) {
             if (__instance == null || __instance.ImpostorVentButton == null || __instance.UseButton == null) return;
             var lp = PlayerControl.LocalPlayer;
@@ -802,7 +852,7 @@ namespace TOR_ChanceModifier {
 
             // Collect the offsets of the role's currently-active ability buttons. Mirrored buttons sit
             // on the far right (outside the left cluster) and never collide with our candidate slots.
-            var occupied = new List<Vector3>();
+            occupied.Clear();
             foreach (var b in TheOtherRoles.Objects.CustomButton.buttons) {
                 if (b == null || b.mirror) continue;
                 if (b.actionButtonGameObject == null || !b.actionButtonGameObject.activeSelf) continue;
@@ -961,9 +1011,9 @@ namespace TOR_ChanceModifier {
             }
         }
 
-        // Temporary diagnostics: confirm at runtime whether this postfix actually runs and what it
-        // sees. Remove once the vote multiplier is verified working in-game.
-        internal static bool DebugVotes = true;
+        // Vote-Diagnose-Logging. Defaultet auf AUS (Release), bleibt aber ohne Rebuild über die
+        // BepInEx-Config [Debug] VoteLogging umschaltbar (P0.5). Gebunden in ChancePlugin.Load().
+        internal static bool DebugVotes => ChancePlugin.VoteLogging != null && ChancePlugin.VoteLogging.Value;
 
         // CalculateVotes is a STATIC method whose first parameter is named "__instance".
         // Harmony reserves "__instance" for the declaring-type instance (null on static methods),
@@ -989,6 +1039,11 @@ namespace TOR_ChanceModifier {
 
                 int baseVotes = (Mayor.mayor != null && Mayor.mayor.PlayerId == voterId && Mayor.voteTwice) ? 2 : 1;
                 int delta = mult - baseVotes;
+                // P1.4: Das Display kann für einen Mayor mit Doppelstimme den Multiplikator x1 nicht
+                // als eine Stimme rendern (TORs j---Doppelung zeichnet stets >=2 Icons). Statt das
+                // Display zu verbiegen, zählt der Tally hier ebenfalls 2 — der Multiplikator senkt
+                // nie unter die Mayor-Baseline. Damit gilt count == icons (display ist sonst Lügner).
+                if (baseVotes == 2 && mult == 1) delta = 0;
                 if (DebugVotes) {
                     int before = __result.TryGetValue(votedFor, out int c) ? c : 0;
                     ChancePlugin.Logger?.LogInfo($"[Chance] vote postfix: voter={voterId} votedFor={votedFor} mult={mult} base={baseVotes} delta={delta} before={before}.");

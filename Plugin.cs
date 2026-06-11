@@ -23,10 +23,14 @@ namespace TOR_ChanceModifier {
     [BepInProcess("Among Us.exe")]
     public class ChancePlugin : BasePlugin {
         public const string Id = "com.tormod.chancemodifier";
-        public const string VersionString = "1.0.15";
+        public const string VersionString = "1.2.0";
         public static System.Version Version = System.Version.Parse(VersionString);
 
         public static BepInEx.Logging.ManualLogSource Logger;
+
+        // Vote-Diagnose-Logging (P0.5): defaultet AUS, ohne Rebuild umschaltbar. Von
+        // ChanceVoteMultiplierPatch.DebugVotes gelesen.
+        public static ConfigEntry<bool> VoteLogging;
 
         internal static HarmonyLib.Harmony Harmony = new HarmonyLib.Harmony(Id);
 
@@ -35,6 +39,8 @@ namespace TOR_ChanceModifier {
 
             // Check if this mod is enabled.
             var enabled = Config.Bind("General", "Enabled", true, "Enable this mod");
+            VoteLogging = Config.Bind("Debug", "VoteLogging", false,
+                "Log per-voter vote multiplier diagnostics each meeting (default off).");
 
             // Im Mod-Manager registrieren — auch wenn deaktiviert, damit der Mod dort sichtbar
             // bleibt und wieder aktiviert werden kann. RuntimeEnabled spiegelt den echten Ladezustand.
@@ -225,11 +231,16 @@ namespace TOR_ChanceModifier {
             }
 
             // Clickable mod name, inserted just below the "TheOtherRoles vX" line.
-            string chanceLine = $"<link=\"chanceCredits\"><color=#FF8C00>TOR - Unknown Chaos</color> v{ChancePlugin.Version}</link>";
-            int nl = text.IndexOf('\n');
-            text = nl >= 0
-                ? text.Substring(0, nl + 1) + chanceLine + "\n" + text.Substring(nl + 1)
-                : text + "\n" + chanceLine;
+            // P2.3: Marker-Guard. TOR baut den Text jeden Frame neu auf, daher ist die Zeile
+            // normalerweise abwesend und wird eingefügt. Sollte TOR den Text künftig NICHT mehr neu
+            // bauen, verhinderte der Guard ein frame-weises Stapeln derselben Zeile.
+            if (!text.Contains("chanceCredits")) {
+                string chanceLine = $"<link=\"chanceCredits\"><color=#FF8C00>TOR - Unknown Chaos</color> v{ChancePlugin.Version}</link>";
+                int nl = text.IndexOf('\n');
+                text = nl >= 0
+                    ? text.Substring(0, nl + 1) + chanceLine + "\n" + text.Substring(nl + 1)
+                    : text + "\n" + chanceLine;
+            }
 
             // Insert the shared credit under TOR's "Design by Bavari" line — but only if no other
             // mod already added it this frame, so "Modded by DaUnknown" appears at most once.

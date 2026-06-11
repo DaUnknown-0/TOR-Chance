@@ -94,6 +94,59 @@ namespace TOR_ChanceModifier {
             return message;
         }
 
+        // --- F1: Cross-mod lobby handshake board (presentation-layer merge) ---
+        // Documented AppDomain contract — plain strings / Dictionary<int,string> only (the two
+        // assemblies must NOT need each other's types):
+        //   TORMods.Handshake.Registry        → comma-separated guids that have published
+        //   TORMods.Handshake.{guid}.name     → short display name (e.g. "Chance")
+        //   TORMods.Handshake.{guid}.status   → Dictionary<int,string>: clientId → "code<0x1F>version"
+        //                                       code ∈ ok | old | new | mod ; missing clients omitted
+        // The combined per-player overview is rendered by exactly one owner: UsefulTORStuff when it
+        // is loaded; otherwise this mod falls back to its own standalone block (unchanged for
+        // single-mod installs). Chance always PUBLISHES, but only RENDERS when Useful is absent.
+        private const string HandshakeRegistryKey = "TORMods.Handshake.Registry";
+        private const string HandshakeKeyPrefix = "TORMods.Handshake.";
+        private const string ChanceGuid = "com.tormod.chancemodifier";
+        private const string UsefulGuid = "com.tormod.usefultorstuff";
+        private const char StatusSep = '';
+
+        private static void PublishSnapshot() {
+            try {
+                if (AmongUsClient.Instance == null) return;
+                var status = new Dictionary<int, string>();
+                foreach (var kv in playerVersions) {
+                    PlayerVersion pv = kv.Value;
+                    string code;
+                    int diff = ChancePlugin.Version.CompareTo(pv.version);
+                    if (diff > 0) code = "old";
+                    else if (diff < 0) code = "new";
+                    else code = pv.GuidMatches() ? "ok" : "mod";
+                    status[kv.Key] = code + StatusSep + pv.version;
+                }
+                AppDomain.CurrentDomain.SetData(HandshakeKeyPrefix + ChanceGuid + ".name", "Chance");
+                AppDomain.CurrentDomain.SetData(HandshakeKeyPrefix + ChanceGuid + ".status", status);
+                var reg = AppDomain.CurrentDomain.GetData(HandshakeRegistryKey) as string ?? "";
+                if (!reg.Split(',').Contains(ChanceGuid))
+                    AppDomain.CurrentDomain.SetData(HandshakeRegistryKey, reg == "" ? ChanceGuid : reg + "," + ChanceGuid);
+            } catch { }
+        }
+
+        // True when UsefulTORStuff is loaded (it owns the combined overview when present).
+        private static bool CombinedRendererPresent() =>
+            AppDomain.CurrentDomain.GetData("ModManager.RegisteredMod." + UsefulGuid) != null;
+
+        // P1.5: Beim Betreten einer Lobby den Versions-Cache leeren. ClientIds sind
+        // verbindungsskopiert, sodass alte Einträge sonst nur leaken — das Dictionary soll aber
+        // ausschließlich die aktuelle Lobby widerspiegeln (sonst zeigt die Host-Warnung evtl.
+        // Spieler einer früheren Lobby an).
+        [HarmonyPatch(typeof(AmongUsClient), nameof(AmongUsClient.OnGameJoined))]
+        static class OnGameJoinedPatch {
+            public static void Postfix() {
+                playerVersions.Clear();
+                versionSent = false;
+            }
+        }
+
         // Re-share whenever someone joins, so late joiners learn everyone's version (and vice versa).
         [HarmonyPatch(typeof(AmongUsClient), nameof(AmongUsClient.OnPlayerJoined))]
         static class OnPlayerJoinedPatch {
@@ -120,8 +173,17 @@ namespace TOR_ChanceModifier {
                     ShareVersion();
                 }
 
-                if (AmongUsClient.Instance == null || !AmongUsClient.Instance.AmHost) return;
+                if (AmongUsClient.Instance == null) return;
+                // F1: immer den Snapshot veröffentlichen, damit ein vorhandener kombinierter
+                // Renderer (UsefulTORStuff) die Chance-Spalte zeichnen kann.
+                PublishSnapshot();
+
+                if (!AmongUsClient.Instance.AmHost) return;
                 if (__instance.startState == GameStartManager.StartingStates.Countdown) return;
+
+                // F1: Ist UsefulTORStuff geladen, besitzt es die kombinierte Mod-Check-Übersicht —
+                // dann KEIN eigenes Standalone-Block, sonst sähe der Host zwei getrennte Listen.
+                if (CombinedRendererPresent()) return;
 
                 string chanceMsg = BuildMismatchMessage();
                 if (chanceMsg == "") return;
