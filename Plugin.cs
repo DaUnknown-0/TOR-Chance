@@ -187,6 +187,62 @@ namespace TOR_ChanceModifier {
                 new string[] { "All players", "Only Chance players" }, "All players",
                 ChanceOptions.chaosMode, false);
 
+            // Per-effect enable toggles (default Off → that effect stays vanilla). Each toggle is a
+            // direct child of the Chance modifier, and its value option(s) are re-parented under the
+            // toggle so they only appear once the effect is enabled. TOR's options menu hides an
+            // option when its parent OR grandparent is at selection 0 (CustomOptions.cs:725-726), so
+            // the chain value → toggle → modifierChance renders correctly (exactly two parent levels).
+            ChanceOptions.modifierChanceSpeedEnabled = CustomOption.Create(
+                1136, Types.Modifier, "Enable Speed Randomization", false, ChanceOptions.modifierChance);
+            ChanceOptions.modifierChanceSpeedMin.parent = ChanceOptions.modifierChanceSpeedEnabled;
+            ChanceOptions.modifierChanceSpeedMax.parent = ChanceOptions.modifierChanceSpeedEnabled;
+
+            ChanceOptions.modifierChanceCooldownEnabled = CustomOption.Create(
+                1137, Types.Modifier, "Enable Kill Cooldown Randomization", false, ChanceOptions.modifierChance);
+            ChanceOptions.modifierChanceCooldownMin.parent = ChanceOptions.modifierChanceCooldownEnabled;
+            ChanceOptions.modifierChanceCooldownMax.parent = ChanceOptions.modifierChanceCooldownEnabled;
+
+            ChanceOptions.modifierChanceKillSuccessEnabled = CustomOption.Create(
+                1139, Types.Modifier, "Enable Kill Success Chance", false, ChanceOptions.modifierChance);
+            ChanceOptions.modifierChanceKillDeathChance.parent = ChanceOptions.modifierChanceKillSuccessEnabled;
+
+            ChanceOptions.modifierChanceReportEnabled = CustomOption.Create(
+                1140, Types.Modifier, "Enable Auto-Report", false, ChanceOptions.modifierChance);
+            ChanceOptions.modifierChanceReportChance.parent = ChanceOptions.modifierChanceReportEnabled;
+
+            ChanceOptions.modifierChanceVisionEnabled = CustomOption.Create(
+                1141, Types.Modifier, "Enable Vision Randomization", false, ChanceOptions.modifierChance);
+            ChanceOptions.modifierChanceVisionMin.parent = ChanceOptions.modifierChanceVisionEnabled;
+            ChanceOptions.modifierChanceVisionMax.parent = ChanceOptions.modifierChanceVisionEnabled;
+
+            ChanceOptions.modifierChanceVentEnabled = CustomOption.Create(
+                1142, Types.Modifier, "Enable Vent Access", false, ChanceOptions.modifierChance);
+            ChanceOptions.modifierChanceVentChance.parent = ChanceOptions.modifierChanceVentEnabled;
+
+            ChanceOptions.modifierChanceVoteEnabled = CustomOption.Create(
+                1143, Types.Modifier, "Enable Vote Multiplier", false, ChanceOptions.modifierChance);
+            ChanceOptions.modifierChanceVoteMultMin.parent = ChanceOptions.modifierChanceVoteEnabled;
+            ChanceOptions.modifierChanceVoteMultMax.parent = ChanceOptions.modifierChanceVoteEnabled;
+
+            ChanceOptions.modifierChanceKillDistanceEnabled = CustomOption.Create(
+                1144, Types.Modifier, "Enable Kill Distance", false, ChanceOptions.modifierChance);
+            ChanceOptions.modifierChanceKillDistanceMin.parent = ChanceOptions.modifierChanceKillDistanceEnabled;
+            ChanceOptions.modifierChanceKillDistanceMax.parent = ChanceOptions.modifierChanceKillDistanceEnabled;
+
+            ChanceOptions.modifierChanceSabotageEnabled = CustomOption.Create(
+                1145, Types.Modifier, "Enable Sabotage Cooldown", false, ChanceOptions.modifierChance);
+            ChanceOptions.modifierChanceSabotageCdMin.parent = ChanceOptions.modifierChanceSabotageEnabled;
+            ChanceOptions.modifierChanceSabotageCdMax.parent = ChanceOptions.modifierChanceSabotageEnabled;
+
+            // Tasks are special: they can only be trimmed under "Immediate" activation, so TasksMin/Max
+            // keep their existing invertedParent visibility under the activation mode (set above). The
+            // enable toggle therefore also lives as an invertedParent child of the activation mode (so
+            // it appears alongside the task options in Immediate mode) and only gates the EFFECT in
+            // code — TOR's 2-level visibility can't express modifierChance→mode→toggle→min/max.
+            ChanceOptions.modifierChanceTasksEnabled = CustomOption.Create(
+                1138, Types.Modifier, "Enable Task Reduction", false,
+                ChanceOptions.modifierChanceActivationMode, false, null, "", true);
+
             Harmony.PatchAll(typeof(ChancePlugin).Assembly);
             // Vote multiplier targets a private nested TOR method, so it is patched manually
             // (isolated from PatchAll so a lookup failure can't abort the other patches).

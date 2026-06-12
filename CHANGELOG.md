@@ -1,5 +1,30 @@
 # Changelog — TOR - Unknown Chaos (Chance Modifier)
 
+## Unreleased
+
+### Chaos-Swap — Rollen-Interaktionen
+Audit der Rollen, die der Chaos-Reroll (`erasePlayerRoles` + `setRole` im Exile-WrapUp)
+beschädigen konnte. Details in `CHAOS_SWAP_INTERACTIONS.md`. Alle Fixes host-seitig in
+`ChaosMode.cs`; TOR-Original unverändert.
+- **A5/A4** — `isProtectedFromReroll`: Halter von Rollen, die nicht in den Chaos-Pools liegen
+  (Godfather/Mafioso/Janitor, Deputy, Nice/Evil Guesser), werden nicht mehr in den Reroll
+  gezogen. Verhindert (a) dass diese Rollen nach dem ersten Swap dauerhaft verschwinden und
+  (b) das stille Mafioso-Kill-Unlock beim Wegswappen des Godfather.
+- **A2** — Beide Pool-Filter in `RerollTeam` vergeben eine Rolle nur noch, wenn ihr lebender
+  Halter selbst Reroll-Teilnehmer ist. Im Scope „nur Chance-Spieler" wurde sonst die Rolle
+  eines lebenden Nicht-Teilnehmers per `setRole` überschrieben (ohne Erase, ohne Hinweis).
+  Scope „alle" unverändert.
+- **A3** — Solange ein lebender Deputy existiert, ist auch der Sheriff-Halter geschützt
+  (über A2 damit ebenfalls aus dem Pool). Das Sheriff↔Deputy-Paar bleibt als Einheit
+  unangetastet; kein Race zwischen Deputy-Promotion und Reroll mehr.
+- **A6** — `[HarmonyPriority(Priority.Low)]` auf beiden Chaos-WrapUp-Patches: der Reroll läuft
+  jetzt deterministisch nach TORs WrapUp-Postfix, sodass Seer-/Medium-Seelenlisten und der
+  Deputy-Check vor `clearAndReload` konsumiert werden.
+
+A1 (Misch-Lobby: Clients ohne den Mod behalten die alte Rolle) bleibt eine bewusste
+„alle brauchen den Mod"-Grenze — TORs nativer Erase-RPC würde `Eraser.alreadyErased`
+vergiften und ist daher kein gangbarer Weg; der Version-Handshake warnt bereits.
+
 ## 1.2.0
 
 Minor bump: **P0.3** adds host-authoritative RPC validation, which changes cross-client

@@ -105,6 +105,30 @@ namespace TOR_ChanceModifier {
             return Eraser.alreadyErased != null && Eraser.alreadyErased.Contains(p.PlayerId);
         }
 
+        // Holders that must NEVER be pulled into the reroll. Their roles are deliberately absent
+        // from the chaos pools (see ImpostorRoles/CrewRoles), so rerolling such a player would
+        // erasePlayerRoles their role with no pool entry able to hand it back — the role would
+        // vanish for the rest of the game. Two of them also break a linked-role mechanic if touched:
+        //   • Godfather/Mafioso/Janitor: erasing the Godfather instantly unlocks the Mafioso's kill,
+        //     because TOR gates that on "Godfather alive" (Helpers/UpdatePatch/UsablesPatch) — the
+        //     Mafioso is never promoted, just silently freed.
+        //   • Deputy + (conditionally) Sheriff: the Deputy promotes to Sheriff the moment
+        //     Sheriff.sheriff is null (deputyCheckPromotion fires in the same WrapUp). Keeping the
+        //     Sheriff while a living Deputy can still promote avoids the reroll racing that promotion.
+        // Guesser (Nice/Evil) is excluded because erasePlayerRoles always clears Guesser charges,
+        // permanently removing the guess ability even though the role isn't in any pool.
+        private static bool isProtectedFromReroll(PlayerControl p) {
+            if (p == null) return false;
+            if (p == Godfather.godfather) return true;
+            if (p == Mafioso.mafioso) return true;
+            if (p == Janitor.janitor) return true;
+            if (p == Deputy.deputy) return true;
+            if (Guesser.isGuesser(p.PlayerId)) return true;
+            if (p == Sheriff.sheriff && Deputy.deputy != null && Deputy.deputy.Data != null
+                && !Deputy.deputy.Data.IsDead) return true;
+            return false;
+        }
+
         public static void RerollRoles() {
             if (!(AmongUsClient.Instance?.AmHost ?? false)) return;
             if (!IsEnabled()) return;
@@ -128,10 +152,12 @@ namespace TOR_ChanceModifier {
             if (ChanceOptions.chaosScope != null && ChanceOptions.chaosScope.getSelection() == 1)
                 alive = alive.Where(p => Chance.IsChancePlayer(p.PlayerId)).ToList();
 
-            var impPlayers = alive.Where(p => p.Data.Role.IsImpostor).ToList();
+            var impPlayers = alive.Where(p => p.Data.Role.IsImpostor
+                                               && !isProtectedFromReroll(p)).ToList();
             var crewPlayers = alive.Where(p => !p.Data.Role.IsImpostor
                                                && !Helpers.isNeutral(p)
-                                               && p != Spy.spy && p != Snitch.snitch).ToList();
+                                               && p != Spy.spy && p != Snitch.snitch
+                                               && !isProtectedFromReroll(p)).ToList();
 
             ChancePlugin.Logger?.LogInfo($"[Chaos] Reroll: {impPlayers.Count} impostors, {crewPlayers.Count} crew " +
                 $"(alive={alive.Count}, spy={(Spy.spy != null ? Spy.spy.PlayerId.ToString() : "-")}, snitch={(Snitch.snitch != null ? Snitch.snitch.PlayerId.ToString() : "-")})");
@@ -157,8 +183,12 @@ namespace TOR_ChanceModifier {
                 // "In play only" mode: redistribute just the roles currently held by a living
                 // player (already present this round) among the players. No new roles spawn — the
                 // set of roles stays the same, only their holders change (multi-way Shifter swap).
+                // Only roles whose holder is itself a reroll participant qualify: redistributing a
+                // role held by a living non-participant (possible in the "only Chance players" scope)
+                // would reassign it via setRole and silently strip the original, un-rerolled holder.
                 var inPlay = rolePool
-                    .Where(r => { var h = r.Holder(); return h != null && h.Data != null && !h.Data.IsDead; })
+                    .Where(r => { var h = r.Holder(); return h != null && h.Data != null && !h.Data.IsDead
+                                                              && players.Any(p => p.PlayerId == h.PlayerId); })
                     .Select(r => r.Id)
                     .OrderBy(_ => rnd.Next())
                     .ToList();
@@ -175,6 +205,11 @@ namespace TOR_ChanceModifier {
                     if (opt == null || opt.getSelection() <= 0) return false;
                     var holder = r.Holder();
                     if (holder != null && holder.Data != null && holder.Data.IsDead) return false; // locked to dead holder
+                    // Held by a living non-participant (e.g. a non-Chance player in the "only Chance
+                    // players" scope): assigning it elsewhere would setRole over them and silently
+                    // strip the role without an erase. Leave it where it is.
+                    if (holder != null && holder.Data != null && !holder.Data.IsDead
+                        && !players.Any(p => p.PlayerId == holder.PlayerId)) return false;
                     return true;
                 }).ToList();
 
@@ -297,12 +332,18 @@ namespace TOR_ChanceModifier {
 
     // Triggered after the exile cutscene wraps up. This runs AFTER ExileController.Begin,
     // where the Eraser performs its erasures, so Eraser.alreadyErased is populated in time.
+    // Priority.Low so the reroll runs AFTER TOR's own WrapUp postfix: that postfix consumes
+    // Seer.deadBodyPositions and Medium.futureDeadBodies (spawning their souls) and runs the
+    // Deputy promotion check. The reroll's erasePlayerRoles → clearAndReload would otherwise wipe
+    // those lists first, so the (ex-)Seer/Medium would lose the souls for this meeting's deaths.
     [HarmonyPatch(typeof(ExileController), nameof(ExileController.WrapUp))]
+    [HarmonyPriority(Priority.Low)]
     static class ChaosExileWrapUpPatch {
         public static void Postfix() => ChaosMode.OnMeetingEnded();
     }
 
     [HarmonyPatch(typeof(AirshipExileController), nameof(AirshipExileController.WrapUpAndSpawn))]
+    [HarmonyPriority(Priority.Low)]
     static class ChaosAirshipExileWrapUpPatch {
         public static void Postfix() => ChaosMode.OnMeetingEnded();
     }

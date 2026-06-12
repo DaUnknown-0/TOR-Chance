@@ -46,6 +46,18 @@ namespace TOR_ChanceModifier {
         public static CustomOption chaosMode;
         public static CustomOption chaosRolePool;
         public static CustomOption chaosScope;
+
+        // Per-effect enable toggles. Off (default) → the effect doesn't apply at all (vanilla).
+        public static CustomOption modifierChanceSpeedEnabled;
+        public static CustomOption modifierChanceCooldownEnabled;
+        public static CustomOption modifierChanceTasksEnabled;
+        public static CustomOption modifierChanceKillSuccessEnabled;
+        public static CustomOption modifierChanceReportEnabled;
+        public static CustomOption modifierChanceVisionEnabled;
+        public static CustomOption modifierChanceVentEnabled;
+        public static CustomOption modifierChanceVoteEnabled;
+        public static CustomOption modifierChanceKillDistanceEnabled;
+        public static CustomOption modifierChanceSabotageEnabled;
     }
 
     // ---------------------------------------------------------------------------
@@ -87,6 +99,18 @@ namespace TOR_ChanceModifier {
         public static float killDistanceMin, killDistanceMax;
         public static float sabotageCdMin, sabotageCdMax;
         private static bool tasksEnabled;
+
+        // Per-effect enable flags, read from the toggle options in ReloadRanges. When false the
+        // corresponding patch is skipped (effect stays vanilla). Tasks reuse `tasksEnabled` above.
+        public static bool speedEnabled;
+        public static bool cooldownEnabled;
+        public static bool killSuccessEnabled;
+        public static bool reportEnabled;
+        public static bool visionEnabled;
+        public static bool ventEnabled;
+        public static bool voteEnabled;
+        public static bool killDistanceEnabled;
+        public static bool sabotageEnabled;
 
         private static int activationMode;
         private static int activationUnit;
@@ -195,9 +219,22 @@ namespace TOR_ChanceModifier {
             activationMeetings = (int)(ChanceOptions.modifierChanceActivationMeetings?.getFloat() ?? 0f);
             activationSeconds  = ChanceOptions.modifierChanceActivationSeconds?.getFloat()   ?? 0f;
 
+            // Per-effect enable toggles. Default Off → the effect stays vanilla until enabled.
+            speedEnabled        = ChanceOptions.modifierChanceSpeedEnabled?.getBool()        ?? false;
+            cooldownEnabled     = ChanceOptions.modifierChanceCooldownEnabled?.getBool()     ?? false;
+            killSuccessEnabled  = ChanceOptions.modifierChanceKillSuccessEnabled?.getBool()  ?? false;
+            reportEnabled       = ChanceOptions.modifierChanceReportEnabled?.getBool()       ?? false;
+            visionEnabled       = ChanceOptions.modifierChanceVisionEnabled?.getBool()       ?? false;
+            ventEnabled         = ChanceOptions.modifierChanceVentEnabled?.getBool()         ?? false;
+            voteEnabled         = ChanceOptions.modifierChanceVoteEnabled?.getBool()         ?? false;
+            killDistanceEnabled = ChanceOptions.modifierChanceKillDistanceEnabled?.getBool() ?? false;
+            sabotageEnabled     = ChanceOptions.modifierChanceSabotageEnabled?.getBool()     ?? false;
+
             // Task reduction only works for immediate activation: a delayed Chance can't trim tasks
-            // that were already assigned at game start. Disable the task feature entirely when delayed.
-            tasksEnabled = activationMode == 0;
+            // that were already assigned at game start. So it requires BOTH its enable toggle AND
+            // immediate activation; otherwise the task feature is disabled entirely.
+            tasksEnabled = activationMode == 0
+                && (ChanceOptions.modifierChanceTasksEnabled?.getBool() ?? false);
         }
 
         private static bool HasChanceModifier() {
@@ -486,31 +523,30 @@ namespace TOR_ChanceModifier {
         public static string GetChanceShortDescription(byte playerId) {
             if (PlayerControl.LocalPlayer == null || playerId != PlayerControl.LocalPlayer.PlayerId)
                 return "You are CHAOS!";
-            if (!speedMod.TryGetValue(playerId, out float speed)
-                || !cooldownMod.TryGetValue(playerId, out float cd)
-                || !visionMod.TryGetValue(playerId, out float vis)
-                || !tasksMod.TryGetValue(playerId, out byte tasks))
-                return "You are CHAOS!";
-
-            string line1 = $"Speed {speed:0.00}× | Kill CD {cd:0.0}s | Vision {vis:0.00}×";
-
-            var extras = new List<string>();
-            if (tasks != NoTaskChange) extras.Add($"Tasks {tasks}");
-            if (voteMultiplierMod.TryGetValue(playerId, out byte votes)) extras.Add($"Votes ×{votes}");
-            if (ventAccessMod.TryGetValue(playerId, out bool vent) && vent) extras.Add("Vent ✓");
-            if (killDistanceMod.TryGetValue(playerId, out float kd)) extras.Add($"KillDist {kd:0.0}");
+            // Only surface effects whose enable toggle is actually on, so the text never advertises
+            // a randomized stat that isn't applied (every disabled effect is plain vanilla).
+            var parts = new List<string>();
+            if (speedEnabled && speedMod.TryGetValue(playerId, out float speed)) parts.Add($"Speed {speed:0.00}×");
+            if (cooldownEnabled && cooldownMod.TryGetValue(playerId, out float cd)) parts.Add($"Kill CD {cd:0.0}s");
+            if (visionEnabled && visionMod.TryGetValue(playerId, out float vis)) parts.Add($"Vision {vis:0.00}×");
+            // tasksMod is NoTaskChange whenever the task feature is disabled (toggle off or delayed).
+            if (tasksMod.TryGetValue(playerId, out byte tasks) && tasks != NoTaskChange) parts.Add($"Tasks {tasks}");
+            if (voteEnabled && voteMultiplierMod.TryGetValue(playerId, out byte votes)) parts.Add($"Votes ×{votes}");
+            if (ventEnabled && ventAccessMod.TryGetValue(playerId, out bool vent) && vent) parts.Add("Vent ✓");
+            if (killDistanceEnabled && killDistanceMod.TryGetValue(playerId, out float kd)) parts.Add($"KillDist {kd:0.0}");
             // Sabotage cooldown only affects impostors, so only surface it for them.
-            if (PlayerControl.LocalPlayer.Data?.Role?.IsImpostor == true
-                && sabotageCdMod.TryGetValue(playerId, out float scd)) extras.Add($"Sabo CD {scd:0.0}s");
+            if (sabotageEnabled && PlayerControl.LocalPlayer.Data?.Role?.IsImpostor == true
+                && sabotageCdMod.TryGetValue(playerId, out float scd)) parts.Add($"Sabo CD {scd:0.0}s");
 
-            return extras.Count > 0 ? line1 + "\n" + string.Join(" | ", extras) : line1;
+            if (parts.Count == 0) return "You are CHAOS!";
+            return string.Join(" | ", parts);
         }
 
         // Auto-report: once per second, if a body is within report range of the local Chance
         // player, there is a `reportChance`% chance they panic-report it. Driven per client for
         // the local player (CmdReportDeadBody is a client command), so each player rolls their own.
         public static void UpdateAutoReport(float deltaTime) {
-            if (!IsActive() || reportChance <= 0f) return;
+            if (!IsActive() || !reportEnabled || reportChance <= 0f) return;
             if (AmongUsClient.Instance?.GameState != InnerNet.InnerNetClient.GameStates.Started) return;
 
             var lp = PlayerControl.LocalPlayer;
@@ -687,6 +723,7 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(Helpers), nameof(Helpers.checkMuderAttempt))]
     static class ChanceMurderAttemptPatch {
         public static void Postfix(PlayerControl killer, PlayerControl target, ref MurderAttemptResult __result) {
+            if (!Chance.killSuccessEnabled) return;
             if (__result != MurderAttemptResult.PerformKill) return;
             if (killer == null) return;
             if (!Chance.IsChancePlayer(killer.PlayerId)) return;
@@ -722,6 +759,7 @@ namespace TOR_ChanceModifier {
     static class ChanceVisionPatch {
         public static void Postfix(ref float __result, ShipStatus __instance,
                                    [HarmonyArgument(0)] NetworkedPlayerInfo player) {
+            if (!Chance.visionEnabled) return;
             if (player == null) return;
             if (!Chance.isChance(player.PlayerId)) return;
             if (!Chance.visionMod.TryGetValue(player.PlayerId, out float vis)) return;
@@ -762,6 +800,7 @@ namespace TOR_ChanceModifier {
     [HarmonyPriority(Priority.Last)]
     static class ChanceSpeedPatch {
         public static void Postfix(PlayerPhysics __instance) {
+            if (!Chance.speedEnabled) return;
             if (!__instance.AmOwner) return;
             if (__instance.body == null || __instance.myPlayer == null) return;
             var lp = PlayerControl.LocalPlayer;
@@ -780,6 +819,7 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(PlayerControl), nameof(PlayerControl.SetKillTimer))]
     static class ChanceKillCooldownPatch {
         public static void Postfix(PlayerControl __instance) {
+            if (!Chance.cooldownEnabled) return;
             if (!Chance.isChance(__instance.PlayerId)) return;
             if (!Chance.cooldownMod.TryGetValue(__instance.PlayerId, out float cd)) return;
             // Das Clampen des killTimer gilt für jede Chance-Instanz; das HUD-Kill-Button gehört
@@ -798,6 +838,7 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(Helpers), nameof(Helpers.roleCanUseVents))]
     static class ChanceVentAccessPatch {
         public static void Postfix(PlayerControl player, ref bool __result) {
+            if (!Chance.ventEnabled) return;
             if (player == null) return;
             if (!Chance.isChance(player.PlayerId)) return;
             if (Chance.ventAccessMod.TryGetValue(player.PlayerId, out bool canVent) && canVent)
@@ -840,6 +881,7 @@ namespace TOR_ChanceModifier {
         private static readonly List<Vector3> occupied = new List<Vector3>();
 
         public static void Postfix(HudManager __instance) {
+            if (!Chance.ventEnabled) return;
             if (__instance == null || __instance.ImpostorVentButton == null || __instance.UseButton == null) return;
             var lp = PlayerControl.LocalPlayer;
             if (lp == null || lp.Data == null) return;
@@ -886,6 +928,7 @@ namespace TOR_ChanceModifier {
         public static bool Prefix(ref PlayerControl __result,
                                   bool onlyCrewmates, bool targetPlayersInVents,
                                   List<PlayerControl> untargetablePlayers, PlayerControl targetingPlayer) {
+            if (!Chance.killDistanceEnabled) return true;
             PlayerControl tp = targetingPlayer ?? PlayerControl.LocalPlayer;
             if (tp == null || tp.Data == null) return true;
             if (!Chance.isChance(tp.PlayerId)) return true;
@@ -945,6 +988,7 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(HudManager), nameof(HudManager.Update))]
     static class ChanceSabotageCooldownPatch {
         public static void Postfix() {
+            if (!Chance.sabotageEnabled) return;
             var ship = ShipStatus.Instance;
             if (ship == null) return;
             try {
@@ -1025,7 +1069,7 @@ namespace TOR_ChanceModifier {
             bool active = Chance.IsActive();
             if (DebugVotes)
                 ChancePlugin.Logger?.LogInfo($"[Chance] vote postfix: fired (hud={(hud != null)}, __0={(__0 != null)}, active={active}, result={(__result != null)}).");
-            if (__result == null || hud == null || !active) return;
+            if (__result == null || hud == null || !active || !Chance.voteEnabled) return;
             var states = hud.playerStates;
             if (states == null) return;
             for (int i = 0; i < states.Length; i++) {
@@ -1113,7 +1157,7 @@ namespace TOR_ChanceModifier {
         // total is entries + 1.
         static void Prefix(ref Il2CppStructArray<MeetingHud.VoterState> states) {
             try {
-                if (states == null || !Chance.IsActive()) return;
+                if (states == null || !Chance.IsActive() || !Chance.voteEnabled) return;
 
                 var rebuilt = new List<MeetingHud.VoterState>(states.Length);
                 for (int i = 0; i < states.Length; i++) {
