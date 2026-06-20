@@ -249,6 +249,15 @@ namespace TOR_ChanceModifier {
             }
 
             foreach (var entry in result) {
+                // Skip reassigning a player to the role they already hold. The reroll otherwise runs
+                // erasePlayerRoles → <Role>.clearAndReload → setRole, which silently wipes that role's
+                // live state — e.g. the Medic shield (Medic.shielded), even though the player stays
+                // Medic. Leaving it untouched preserves the shield (and is cross-client correct: no
+                // RPC is sent for this player, so no client wipes anything). NoneRoleId stays as-is.
+                if (entry.Value != NoneRoleId
+                    && rolePool.Any(r => (byte)r.Id == entry.Value
+                                         && r.Holder() != null && r.Holder().PlayerId == entry.Key))
+                    continue;
                 SendChaosReassign(entry.Key, entry.Value);
             }
         }
