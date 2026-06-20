@@ -30,10 +30,10 @@ These changes build cleanly but could not be verified statically; confirm them i
 ## P1.5 — Handshake cache reset
 - [ ] Leave a lobby and join another; the host mod-check list shows only current-lobby players.
 
-## F1 — Combined lobby Mod-Check (needs UsefulTORStuff installed)
+## F1 — Combined lobby Mod-Check (needs TOR - Forgotten Fixes installed)
 - [ ] With both mods installed: Chance does NOT draw its own version-warning list; the combined
-      "Mod-Check:" block (rendered by Useful TOR Stuff) shows the Chance column.
-- [ ] With UsefulTORStuff NOT installed: Chance shows its own standalone mismatch list as before.
+      "Mod-Check:" block (rendered by TOR - Forgotten Fixes) shows the Chance column.
+- [ ] With TOR - Forgotten Fixes NOT installed: Chance shows its own standalone mismatch list as before.
 
 ## P1.3 — Kill cooldown HUD
 - [ ] Local Chance impostor/role with kill button: button cooldown reflects only the local player,
