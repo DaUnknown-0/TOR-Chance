@@ -252,6 +252,10 @@ namespace TOR_ChanceModifier {
             ChanceVoteMultiplierDisplayPatch.TryPatch(Harmony);
 
             AddComponent<ChanceModUpdater>();
+
+            // Lobby-Passwortsperre. Ist UsefulTORStuff geladen, überlässt dieses Gate
+            // ihm die Anzeige und liest nur dessen AppDomain-Unlock-Status.
+            AddComponent<ChanceLobbyPasswordGate>();
         }
     }
 
