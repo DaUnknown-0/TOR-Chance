@@ -3,15 +3,15 @@
 // Based on The Other Roles (https://github.com/TheOtherRolesAU/TheOtherRoles), GPL-3.0.
 
 /*
- * ChanceLobbyPasswordGate — Passwortsperre für den Spielstart in der ChanceMod.
+ * ChanceLobbyPasswordGate — lobby password gate for the ChanceMod.
  *
- * Ist UsefulTORStuff gleichzeitig geladen, übernimmt dessen Gate die Kontrolle komplett;
- * dieses Gate zeigt dann kein eigenes Panel und delegiert den Unlock-Status über AppDomain.
- * Ist UsefulTORStuff NICHT geladen, verhält sich dieses Gate identisch: es lädt den Hash
- * aus derselben Datei im GitHub-Repo und zeigt sein eigenes Eingabe-Panel.
+ * If UsefulTORStuff is loaded, that mod's gate takes full control — this gate shows no panel
+ * and reads the unlock state from AppDomain. If UsefulTORStuff is NOT loaded, this gate fetches
+ * the hash independently from the same file and shows its own panel.
  *
- * Passwort ändern: password_hash.txt im Repo DaUnknown-0/Useful-TOR-stuff anpassen
- * (SHA-256, hex, lowercase, 64 Zeichen) und pushen. Kein Neu-Kompilieren nötig.
+ * Once unlocked, the gate stays open for the entire game session (until the process exits).
+ *
+ * To change the password: update password_hash.txt in DaUnknown-0/Useful-TOR-stuff and push.
  */
 
 using System;
@@ -30,19 +30,16 @@ namespace TOR_ChanceModifier
 {
     public class ChanceLobbyPasswordGate : MonoBehaviour
     {
-        // Selbe Datei wie UsefulTORStuff — ein Hash steuert beide Mods.
+        // Same file as UsefulTORStuff — one hash controls both mods.
         private const string HashFileUrl =
             "https://raw.githubusercontent.com/DaUnknown-0/Useful-TOR-stuff/main/password_hash.txt";
 
-        // AppDomain-Schlüssel, die UsefulTORStuff setzt (identische Strings wie dort).
+        // AppDomain keys set by UsefulTORStuff (identical strings).
         private const string AppKeyActive   = "LobbyPasswordGate.Active";
         private const string AppKeyUnlocked = "LobbyPasswordGate.Unlocked";
 
-        // True wenn UsefulTORStuff's Gate geladen ist → dieses Gate ist passiv.
         private static bool UsefulStuffActive =>
             AppDomain.CurrentDomain.GetData(AppKeyActive) is bool b && b;
-
-        // Unlock-Status von UsefulTORStuff (nur relevant wenn UsefulStuffActive).
         private static bool UsefulStuffUnlocked =>
             AppDomain.CurrentDomain.GetData(AppKeyUnlocked) is bool b && b;
 
@@ -69,16 +66,23 @@ namespace TOR_ChanceModifier
             Instance = this;
             DontDestroyOnLoad(gameObject);
 
-            // Fetch nur starten wenn UsefulTORStuff NICHT da ist — sonst unnötig.
+            // Only fetch independently when UsefulTORStuff is not handling the gate.
             if (!UsefulStuffActive)
                 this.StartCoroutine(CoFetchHash());
         }
 
         public void Update()
         {
-            // Passiv wenn UsefulTORStuff das Gate übernimmt.
             if (UsefulStuffActive) return;
             if (_panel == null || !_panel.activeSelf) return;
+
+            // Escape → leave lobby.
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                LeaveGame();
+                return;
+            }
+
             if (_fetchState != FetchState.Ready) return;
 
             if (_errorClearTimer > 0f)
@@ -130,21 +134,16 @@ namespace TOR_ChanceModifier
             if (_panel != null) _panel.SetActive(false);
         }
 
-        private void ResetOwnLock()
+        private static void LeaveGame()
         {
-            _unlocked = false;
-            _inputBuffer = "";
-            HidePanel();
+            try { AmongUsClient.Instance?.ExitGame(DisconnectReasons.ExitGame); }
+            catch (Exception ex) { ChancePlugin.Logger?.LogError($"[ChanceLobbyPasswordGate] LeaveGame failed: {ex}"); }
         }
 
-        // Gibt an ob das Spiel starten darf (eigenes Gate ODER UsefulTORStuff-Gate).
-        private static bool IsUnlocked()
-        {
-            if (UsefulStuffActive) return UsefulStuffUnlocked;
-            return Instance != null && Instance._unlocked;
-        }
+        private static bool IsUnlocked() =>
+            UsefulStuffActive ? UsefulStuffUnlocked : (Instance != null && Instance._unlocked);
 
-        // ── Hash aus GitHub laden ────────────────────────────────────────────────────────────
+        // ── Fetch hash from GitHub ────────────────────────────────────────────────────────────
 
         [HideFromIl2Cpp]
         private IEnumerator CoFetchHash()
@@ -165,7 +164,7 @@ namespace TOR_ChanceModifier
             if (www.isNetworkError || www.isHttpError)
             {
                 ChancePlugin.Logger?.LogError(
-                    $"[ChanceLobbyPasswordGate] Hash-Datei nicht erreichbar ({www.error}).");
+                    $"[ChanceLobbyPasswordGate] Hash file unreachable ({www.error}).");
                 www.downloadHandler.Dispose();
                 www.Dispose();
                 _fetchState = FetchState.Failed;
@@ -181,12 +180,12 @@ namespace TOR_ChanceModifier
             {
                 _fetchedHash = raw.ToLowerInvariant();
                 _fetchState = FetchState.Ready;
-                ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Hash erfolgreich geladen.");
+                ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Hash loaded successfully.");
             }
             else
             {
                 ChancePlugin.Logger?.LogError(
-                    $"[ChanceLobbyPasswordGate] Ungültige Hash-Datei (Länge {raw.Length}).");
+                    $"[ChanceLobbyPasswordGate] Invalid hash file (length {raw.Length}).");
                 _fetchState = FetchState.Failed;
             }
 
@@ -201,7 +200,7 @@ namespace TOR_ChanceModifier
             return true;
         }
 
-        // ── Passwort prüfen ──────────────────────────────────────────────────────────────────
+        // ── Password check ────────────────────────────────────────────────────────────────────
 
         private void TryUnlock()
         {
@@ -219,17 +218,17 @@ namespace TOR_ChanceModifier
                 {
                     _unlocked = true;
                     HidePanel();
-                    ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Entsperrt.");
+                    ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Unlocked.");
                 }
                 else
                 {
-                    ShowError("Falsches Passwort.");
-                    ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Falscher Passwort-Versuch.");
+                    ShowError("Wrong password.");
+                    ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Wrong password attempt.");
                 }
             }
             catch (Exception ex)
             {
-                ChancePlugin.Logger?.LogError($"[ChanceLobbyPasswordGate] Hash-Check fehlgeschlagen: {ex}");
+                ChancePlugin.Logger?.LogError($"[ChanceLobbyPasswordGate] Hash check failed: {ex}");
                 _inputBuffer = "";
             }
         }
@@ -244,7 +243,7 @@ namespace TOR_ChanceModifier
             _errorClearTimer = 2f;
         }
 
-        // ── Panel-UI ────────────────────────────────────────────────────────────────────────
+        // ── Panel UI ──────────────────────────────────────────────────────────────────────────
 
         private void BuildPanel()
         {
@@ -262,6 +261,7 @@ namespace TOR_ChanceModifier
 
             _panel.AddComponent<GraphicRaycaster>();
 
+            // Full-screen overlay — blocks all mouse input from reaching the lobby behind it.
             var overlay = new GameObject("Overlay");
             overlay.transform.SetParent(_panel.transform, false);
             var overlayRect = overlay.AddComponent<RectTransform>();
@@ -270,17 +270,18 @@ namespace TOR_ChanceModifier
             overlayRect.sizeDelta = Vector2.zero;
             overlay.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.72f);
 
+            // Centered dialog box.
             var box = new GameObject("Box");
             box.transform.SetParent(_panel.transform, false);
             var boxRect = box.AddComponent<RectTransform>();
             boxRect.anchorMin = new Vector2(0.5f, 0.5f);
             boxRect.anchorMax = new Vector2(0.5f, 0.5f);
-            boxRect.pivot    = new Vector2(0.5f, 0.5f);
-            boxRect.sizeDelta = new Vector2(520, 290);
+            boxRect.pivot     = new Vector2(0.5f, 0.5f);
+            boxRect.sizeDelta = new Vector2(520, 310);
             box.AddComponent<Image>().color = new Color(0.08f, 0.08f, 0.14f, 0.98f);
 
             MakeLabel(box, "Title", new Vector2(0, -22), new Vector2(-20, 52),
-                "LOBBY PASSWORT", 30, FontStyles.Bold, new Color(0.3f, 0.7f, 1f));
+                "LOBBY PASSWORD", 30, FontStyles.Bold, new Color(0.3f, 0.7f, 1f));
 
             _hintLabel = MakeLabel(box, "Hint", new Vector2(0, -82), new Vector2(-30, 30),
                 "", 17, FontStyles.Normal, new Color(0.82f, 0.82f, 0.82f));
@@ -303,10 +304,10 @@ namespace TOR_ChanceModifier
             maskedRect.offsetMin = new Vector2(10, 0);
             maskedRect.offsetMax = new Vector2(-10, 0);
             _maskedLabel = maskedObj.AddComponent<TextMeshProUGUI>();
-            _maskedLabel.text = "";
-            _maskedLabel.fontSize = 28;
+            _maskedLabel.text      = "";
+            _maskedLabel.fontSize  = 28;
             _maskedLabel.alignment = TextAlignmentOptions.Center;
-            _maskedLabel.color = Color.white;
+            _maskedLabel.color     = Color.white;
 
             var statusObj = new GameObject("Status");
             statusObj.transform.SetParent(box.transform, false);
@@ -317,13 +318,13 @@ namespace TOR_ChanceModifier
             statusRect.anchoredPosition = new Vector2(0, -183);
             statusRect.sizeDelta = new Vector2(-20, 28);
             _statusLabel = statusObj.AddComponent<TextMeshProUGUI>();
-            _statusLabel.text = "";
-            _statusLabel.fontSize = 18;
+            _statusLabel.text      = "";
+            _statusLabel.fontSize  = 18;
             _statusLabel.alignment = TextAlignmentOptions.Center;
-            _statusLabel.color = new Color(1f, 0.3f, 0.3f);
+            _statusLabel.color     = new Color(1f, 0.3f, 0.3f);
 
-            MakeLabel(box, "Footer", new Vector2(0, -222), new Vector2(-20, 24),
-                "[Enter] bestätigen    [Backspace] löschen", 14, FontStyles.Normal,
+            MakeLabel(box, "Footer", new Vector2(0, -240), new Vector2(-20, 24),
+                "[Enter] confirm    [Backspace] delete    [Esc] leave lobby", 14, FontStyles.Normal,
                 new Color(0.5f, 0.5f, 0.5f));
 
             _panel.SetActive(true);
@@ -336,17 +337,17 @@ namespace TOR_ChanceModifier
             switch (_fetchState)
             {
                 case FetchState.Loading:
-                    if (_hintLabel != null) { _hintLabel.text = "Lade Konfiguration..."; _hintLabel.color = new Color(0.9f, 0.9f, 0.4f); }
+                    if (_hintLabel != null) { _hintLabel.text = "Loading configuration..."; _hintLabel.color = new Color(0.9f, 0.9f, 0.4f); }
                     if (_maskedLabel != null) _maskedLabel.text = "";
                     if (_statusLabel != null) _statusLabel.text = "";
                     break;
                 case FetchState.Failed:
-                    if (_hintLabel != null) { _hintLabel.text = "Fehler: password_hash.txt nicht erreichbar."; _hintLabel.color = new Color(1f, 0.35f, 0.35f); }
+                    if (_hintLabel != null) { _hintLabel.text = "Error: password_hash.txt not reachable."; _hintLabel.color = new Color(1f, 0.35f, 0.35f); }
                     if (_maskedLabel != null) _maskedLabel.text = "";
-                    if (_statusLabel != null) { _statusLabel.text = "Spielstart dauerhaft blockiert."; _statusLabel.color = new Color(1f, 0.35f, 0.35f); }
+                    if (_statusLabel != null) { _statusLabel.text = "Game start permanently blocked."; _statusLabel.color = new Color(1f, 0.35f, 0.35f); }
                     break;
                 case FetchState.Ready:
-                    if (_hintLabel != null) { _hintLabel.text = "Passwort eingeben und mit Enter bestätigen:"; _hintLabel.color = new Color(0.82f, 0.82f, 0.82f); }
+                    if (_hintLabel != null) { _hintLabel.text = "Enter password and confirm with Enter:"; _hintLabel.color = new Color(0.82f, 0.82f, 0.82f); }
                     if (_statusLabel != null) _statusLabel.text = "";
                     break;
             }
@@ -373,17 +374,7 @@ namespace TOR_ChanceModifier
             return tmp;
         }
 
-        // ── Harmony-Patches ──────────────────────────────────────────────────────────────────
-
-        [HarmonyPatch(typeof(AmongUsClient), nameof(AmongUsClient.OnGameJoined))]
-        static class OnGameJoinedPatch
-        {
-            public static void Postfix()
-            {
-                Instance?.ResetOwnLock();
-                ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Lobby beigetreten — Sperre zurückgesetzt.");
-            }
-        }
+        // ── Harmony patches ───────────────────────────────────────────────────────────────────
 
         [HarmonyPatch(typeof(GameStartManager), nameof(GameStartManager.Update))]
         [HarmonyPriority(Priority.Low)]
@@ -393,8 +384,6 @@ namespace TOR_ChanceModifier
             {
                 if (Instance == null) return;
                 if (AmongUsClient.Instance == null || !AmongUsClient.Instance.AmHost) return;
-
-                // Wenn UsefulTORStuff aktiv ist, überlässt dieses Gate ihm die Anzeige.
                 if (UsefulStuffActive) return;
 
                 if (!Instance._unlocked)
@@ -413,7 +402,7 @@ namespace TOR_ChanceModifier
                 if (IsUnlocked()) return true;
 
                 Instance?.ShowPanel();
-                ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Spielstart blockiert — Passwort erforderlich.");
+                ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Game start blocked — password required.");
                 return false;
             }
         }
