@@ -57,6 +57,9 @@ namespace TOR_ChanceModifier
         private TextMeshProUGUI _statusLabel;
         private string _inputBuffer = "";
         private float _errorClearTimer;
+        // True only while WE are holding the player frozen, so we restore moveable exactly once (never
+        // every frame) and don't fight the game's lobby walk-in animation control.
+        private bool _frozen;
 
         public ChanceLobbyPasswordGate(IntPtr ptr) : base(ptr) { }
 
@@ -165,14 +168,19 @@ namespace TOR_ChanceModifier
 
         // The overlay can't block keyboard movement, so we pin moveable=false each frame while the
         // panel is up (the same field TOR's Hacker/Trap/etc. use to freeze a player).
-        private static void FreezeLocalPlayer()
+        private void FreezeLocalPlayer()
         {
             try { if (PlayerControl.LocalPlayer != null) PlayerControl.LocalPlayer.moveable = false; }
             catch { }
+            _frozen = true;
         }
 
-        private static void UnfreezeLocalPlayer()
+        // Restore movement ONCE — only if we actually froze. Setting moveable=true every frame would
+        // override the game's own moveable=false during the lobby walk-in animation and freeze the bean.
+        private void UnfreezeLocalPlayer()
         {
+            if (!_frozen) return;
+            _frozen = false;
             try { if (PlayerControl.LocalPlayer != null) PlayerControl.LocalPlayer.moveable = true; }
             catch { }
         }
