@@ -304,7 +304,7 @@ namespace TOR_ChanceModifier {
             // normalerweise abwesend und wird eingefügt. Sollte TOR den Text künftig NICHT mehr neu
             // bauen, verhinderte der Guard ein frame-weises Stapeln derselben Zeile.
             if (!text.Contains("chanceCredits")) {
-                string chanceLine = $"<link=\"chanceCredits\"><color=#FF8C00>TOR - Unknown Chaos</color> v{ChancePlugin.Version}</link>";
+                string chanceLine = $"<link=\"chanceCredits\"><color=#FF8C00>TOR - Unknown Chaos</color> v{VersionDisplay.Format(ChancePlugin.Version)}</link>";
                 int nl = text.IndexOf('\n');
                 text = nl >= 0
                     ? text.Substring(0, nl + 1) + chanceLine + "\n" + text.Substring(nl + 1)

@@ -30,8 +30,9 @@ jobs:
         id: version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Tag '$GITHUB_REF_NAME' ist keine gueltige Version (erwartet vX.Y.Z)."
+          # vX.Y.Z (stable) oder vX.Y.Z.W (Testversion, W = Testversionsnummer).
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+            echo "::error::Tag '$GITHUB_REF_NAME' ist keine gueltige Version (erwartet vX.Y.Z oder vX.Y.Z.W)."
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -39,7 +40,7 @@ jobs:
       - name: VersionString in Plugin.cs auf Tag setzen
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          sed -i -E "s/(VersionString = \")[0-9]+\.[0-9]+\.[0-9]+(\")/\1${VERSION}\2/" Plugin.cs
+          sed -i -E "s/(VersionString = \")[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?(\")/\1${VERSION}\3/" Plugin.cs
           echo "Gesetzt auf:"; grep VersionString Plugin.cs
 
       - name: TheOtherRoles.dll aus TOR-Release laden
