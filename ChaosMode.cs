@@ -170,6 +170,9 @@ namespace TOR_ChanceModifier {
             if (Eraser.alreadyErased == null) Eraser.alreadyErased = new List<byte>();
             foreach (var id in erasedSnapshot)
                 if (!Eraser.alreadyErased.Contains(id)) Eraser.alreadyErased.Add(id);
+
+            // Optional second step: reroll the players' primary TOR modifiers (see RerollModifiers).
+            RerollModifiers();
         }
 
         private static void RerollTeam(List<PlayerControl> players, List<ChaosRole> rolePool) {
@@ -332,6 +335,186 @@ namespace TOR_ChanceModifier {
 
         // Read-only Zugriff für den Summary-Trim-Patch (Zeilen am Bildschirmrand kürzen).
         internal static Dictionary<byte, List<string>> AllHistories => roleHistory;
+
+        // ============================================================================================
+        // Chaos: Modifier reroll (optional, default off). After the role reroll, redistribute the
+        // players' PRIMARY TOR modifier (Tiebreaker/Mini/Bait/Bloody/AntiTeleport/Sunglasses/Vip/
+        // Invert/Chameleon/Armored/Shifter). The Chance modifier itself and the Lover pair are left
+        // untouched. Spawn chances + per-modifier quantity limits are respected and a player can end
+        // up with no modifier at all. Host drives the assignment; the strip is broadcast via a Chance
+        // RPC to every mod client, the new modifier through TOR's native SetModifier RPC (so all TOR
+        // clients add it). A player carries at most one primary modifier (TOR's own assignment rule).
+        // ============================================================================================
+        private const byte TorSetModifierRpcId = 105; // CustomRPC.SetModifier (enum is internal to TOR)
+
+        private sealed class ModSpec {
+            public readonly RoleId Id;
+            public readonly Func<int> Rate;            // spawn rate selection 0..10 (10 == guaranteed)
+            public readonly Func<int> Limit;           // global max holders (quantity, or 1 for singletons)
+            public readonly Func<IEnumerable<byte>> Holders; // current holder player ids
+            public readonly bool CrewOnly;             // not impostor, not neutral
+            public readonly bool ExcludeSpy;           // additionally not the Spy
+            public ModSpec(RoleId id, Func<int> rate, Func<int> limit, Func<IEnumerable<byte>> holders,
+                           bool crewOnly = false, bool excludeSpy = false) {
+                Id = id; Rate = rate; Limit = limit; Holders = holders; CrewOnly = crewOnly; ExcludeSpy = excludeSpy;
+            }
+        }
+
+        private static IEnumerable<byte> single(PlayerControl p) {
+            if (p != null) yield return p.PlayerId;
+        }
+        private static IEnumerable<byte> many(List<PlayerControl> list) {
+            if (list == null) yield break;
+            foreach (var p in list) if (p != null) yield return p.PlayerId;
+        }
+
+        private static List<ModSpec> ModifierSpecs() => new List<ModSpec> {
+            new ModSpec(RoleId.Tiebreaker,   () => CustomOptionHolder.modifierTieBreaker.getSelection(),   () => 1, () => single(Tiebreaker.tiebreaker)),
+            new ModSpec(RoleId.Mini,         () => CustomOptionHolder.modifierMini.getSelection(),         () => 1, () => single(Mini.mini)),
+            new ModSpec(RoleId.Armored,      () => CustomOptionHolder.modifierArmored.getSelection(),      () => 1, () => single(Armored.armored)),
+            new ModSpec(RoleId.Shifter,      () => CustomOptionHolder.modifierShifter.getSelection(),      () => 1, () => single(Shifter.shifter), crewOnly: true, excludeSpy: true),
+            new ModSpec(RoleId.Bait,         () => CustomOptionHolder.modifierBait.getSelection(),         () => CustomOptionHolder.modifierBaitQuantity.getQuantity(),         () => many(Bait.bait)),
+            new ModSpec(RoleId.Bloody,       () => CustomOptionHolder.modifierBloody.getSelection(),       () => CustomOptionHolder.modifierBloodyQuantity.getQuantity(),       () => many(Bloody.bloody)),
+            new ModSpec(RoleId.AntiTeleport, () => CustomOptionHolder.modifierAntiTeleport.getSelection(), () => CustomOptionHolder.modifierAntiTeleportQuantity.getQuantity(), () => many(AntiTeleport.antiTeleport)),
+            new ModSpec(RoleId.Sunglasses,   () => CustomOptionHolder.modifierSunglasses.getSelection(),   () => CustomOptionHolder.modifierSunglassesQuantity.getQuantity(),   () => many(Sunglasses.sunglasses), crewOnly: true),
+            new ModSpec(RoleId.Vip,          () => CustomOptionHolder.modifierVip.getSelection(),          () => CustomOptionHolder.modifierVipQuantity.getQuantity(),          () => many(Vip.vip)),
+            new ModSpec(RoleId.Invert,       () => CustomOptionHolder.modifierInvert.getSelection(),       () => CustomOptionHolder.modifierInvertQuantity.getQuantity(),       () => many(Invert.invert)),
+            new ModSpec(RoleId.Chameleon,    () => CustomOptionHolder.modifierChameleon.getSelection(),    () => CustomOptionHolder.modifierChameleonQuantity.getQuantity(),    () => many(Chameleon.chameleon)),
+        };
+
+        private static bool ModifierRerollEnabled() {
+            return ChanceOptions.chaosModifierReroll != null && ChanceOptions.chaosModifierReroll.getSelection() == 1;
+        }
+        private static bool OnlyChanceModifierScope() {
+            return ChanceOptions.chaosModifierScope != null && ChanceOptions.chaosModifierScope.getSelection() == 1;
+        }
+
+        private static bool ModifierAllowed(ModSpec spec, PlayerControl p) {
+            if (spec.CrewOnly && (p.Data.Role.IsImpostor || Helpers.isNeutral(p))) return false;
+            if (spec.ExcludeSpy && p == Spy.spy) return false;
+            return true;
+        }
+
+        public static void RerollModifiers() {
+            if (!(AmongUsClient.Instance?.AmHost ?? false)) return;
+            if (!IsEnabled() || !ModifierRerollEnabled()) return;
+
+            var participants = PlayerControl.AllPlayerControls.ToArray()
+                .Where(p => p != null && p.Data != null && !p.Data.Disconnected && !p.Data.IsDead && p.Data.Role != null)
+                .ToList();
+            if (OnlyChanceModifierScope())
+                participants = participants.Where(p => Chance.IsChancePlayer(p.PlayerId)).ToList();
+            if (participants.Count == 0) return;
+
+            var participantIds = new HashSet<byte>(participants.Select(p => p.PlayerId));
+
+            // Strip the participants' current primary modifiers first, so their slots free up before we
+            // count remaining capacity and reassign.
+            foreach (var p in participants) SendChaosModifierClear(p.PlayerId);
+
+            var specs = ModifierSpecs();
+
+            // Remaining capacity per modifier = global limit minus holders OUTSIDE the participant set
+            // (participants were just cleared). Disabled modifiers (rate 0) contribute nothing.
+            var avail = new Dictionary<RoleId, int>();
+            foreach (var s in specs) {
+                if (s.Rate() <= 0) { avail[s.Id] = 0; continue; }
+                int outside = s.Holders().Count(id => !participantIds.Contains(id));
+                avail[s.Id] = Math.Max(0, s.Limit() - outside);
+            }
+
+            // Total modifiers to hand out among the participants, bounded by the global modifier count
+            // setting and the participant count (the rest stay modifier-less).
+            int countMin = CustomOptionHolder.modifiersCountMin.getSelection();
+            int countMax = CustomOptionHolder.modifiersCountMax.getSelection();
+            if (countMin > countMax) countMin = countMax;
+            int targetCount = Math.Min(rnd.Next(countMin, countMax + 1), participants.Count);
+
+            var shuffled = participants.OrderBy(_ => rnd.Next()).ToList();
+            var assignedTo = new HashSet<byte>();
+            int assigned = 0;
+
+            // 1) Guaranteed (rate == 10) modifiers first, up to their capacity.
+            var ensured = new List<RoleId>();
+            foreach (var s in specs)
+                if (s.Rate() == 10) for (int i = 0; i < avail[s.Id]; i++) ensured.Add(s.Id);
+            ensured = ensured.OrderBy(_ => rnd.Next()).ToList();
+            foreach (var id in ensured) {
+                if (assigned >= targetCount) break;
+                if (avail[id] <= 0) continue;
+                var spec = specs.First(x => x.Id == id);
+                var target = shuffled.FirstOrDefault(p => !assignedTo.Contains(p.PlayerId) && ModifierAllowed(spec, p));
+                if (target == null) continue;
+                AssignModifier(spec, target);
+                assignedTo.Add(target.PlayerId); avail[id]--; assigned++;
+            }
+
+            // 2) Weighted chance modifiers (rate 1..9) for the remaining slots.
+            var tickets = new List<RoleId>();
+            foreach (var s in specs) {
+                int sel = s.Rate();
+                if (sel >= 1 && sel < 10 && avail[s.Id] > 0) for (int i = 0; i < sel; i++) tickets.Add(s.Id);
+            }
+            while (assigned < targetCount && tickets.Count > 0) {
+                RoleId id = tickets[rnd.Next(tickets.Count)];
+                if (avail[id] <= 0) { tickets.RemoveAll(x => x == id); continue; }
+                var spec = specs.First(x => x.Id == id);
+                var target = shuffled.FirstOrDefault(p => !assignedTo.Contains(p.PlayerId) && ModifierAllowed(spec, p));
+                if (target == null) { tickets.RemoveAll(x => x == id); continue; } // nobody eligible for this one
+                AssignModifier(spec, target);
+                assignedTo.Add(target.PlayerId); avail[id]--; assigned++;
+                if (avail[id] <= 0) tickets.RemoveAll(x => x == id);
+            }
+
+            ChancePlugin.Logger?.LogInfo($"[Chaos] Modifier reroll: {assigned} modifier(s) handed to {participants.Count} participant(s).");
+        }
+
+        private static void AssignModifier(ModSpec spec, PlayerControl target) {
+            SendChaosModifierSet(target.PlayerId, (byte)spec.Id, 0);
+        }
+
+        // Host: clear a player's primary modifiers everywhere. The custom Chance RPC reaches mod
+        // clients; the host clears locally. (TOR has no native "remove modifier" RPC, so non-mod
+        // clients can't be told to clear — accepted; the host is authoritative for win conditions.)
+        private static void SendChaosModifierClear(byte playerId) {
+            MessageWriter w = AmongUsClient.Instance.StartRpcImmediately(
+                PlayerControl.LocalPlayer.NetId, Chance.ChaosModifierClearRpcId, Hazel.SendOption.Reliable, -1);
+            w.Write(playerId);
+            AmongUsClient.Instance.FinishRpcImmediately(w);
+            ApplyChaosModifierClear(playerId); // host applies locally (no self-RPC)
+        }
+
+        // Host: assign a modifier through TOR's native SetModifier RPC (reaches every TOR client, mod
+        // or not). The host doesn't receive its own RPC, so it applies locally too.
+        private static void SendChaosModifierSet(byte playerId, byte modifierId, byte flag) {
+            ChancePlugin.Logger?.LogInfo($"[Chaos] Modifier assign: player {playerId} -> {(RoleId)modifierId}");
+            MessageWriter w = AmongUsClient.Instance.StartRpcImmediately(
+                PlayerControl.LocalPlayer.NetId, TorSetModifierRpcId, Hazel.SendOption.Reliable, -1);
+            w.Write(modifierId);
+            w.Write(playerId);
+            w.Write(flag);
+            AmongUsClient.Instance.FinishRpcImmediately(w);
+            try { RPCProcedure.setModifier(modifierId, playerId, flag); } catch { }
+        }
+
+        // Runs on host + every Chance-mod client: strip the player from all primary modifier holders.
+        public static void ApplyChaosModifierClear(byte playerId) {
+            try {
+                Bait.bait?.RemoveAll(x => x != null && x.PlayerId == playerId);
+                Bloody.bloody?.RemoveAll(x => x != null && x.PlayerId == playerId);
+                AntiTeleport.antiTeleport?.RemoveAll(x => x != null && x.PlayerId == playerId);
+                Sunglasses.sunglasses?.RemoveAll(x => x != null && x.PlayerId == playerId);
+                Vip.vip?.RemoveAll(x => x != null && x.PlayerId == playerId);
+                Invert.invert?.RemoveAll(x => x != null && x.PlayerId == playerId);
+                Chameleon.chameleon?.RemoveAll(x => x != null && x.PlayerId == playerId);
+                if (Tiebreaker.tiebreaker != null && Tiebreaker.tiebreaker.PlayerId == playerId) Tiebreaker.tiebreaker = null;
+                if (Mini.mini != null && Mini.mini.PlayerId == playerId) Mini.mini = null;
+                if (Armored.armored != null && Armored.armored.PlayerId == playerId) Armored.armored = null;
+                if (Shifter.shifter != null && Shifter.shifter.PlayerId == playerId) Shifter.shifter = null;
+            } catch (Exception e) {
+                ChancePlugin.Logger?.LogError($"[Chaos] ApplyChaosModifierClear failed for player {playerId}: {e}");
+            }
+        }
     }
 
     [HarmonyPatch(typeof(MeetingHud), nameof(MeetingHud.Start))]

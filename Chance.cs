@@ -46,6 +46,8 @@ namespace TOR_ChanceModifier {
         public static CustomOption chaosMode;
         public static CustomOption chaosRolePool;
         public static CustomOption chaosScope;
+        public static CustomOption chaosModifierReroll;
+        public static CustomOption chaosModifierScope;
 
         // Per-effect enable toggles. Off (default) → the effect doesn't apply at all (vanilla).
         public static CustomOption modifierChanceSpeedEnabled;
@@ -66,6 +68,10 @@ namespace TOR_ChanceModifier {
     public static class Chance {
         public const byte RpcId = 200;
         public const byte ChaosRpcId = 201;
+        // Chaos modifier reroll: host tells every Chance-mod client to strip a player's primary TOR
+        // modifier(s). The new modifier itself is pushed through TOR's native SetModifier RPC (so even
+        // non-mod clients add it), so this custom RPC only carries the CLEAR step.
+        public const byte ChaosModifierClearRpcId = 202;
         internal const byte ActivationRpcId = 250;
         internal const byte VersionHandshakeRpcId = 251;
         // Sentinel task value meaning "do not manage this player's task count" — used when task
@@ -701,6 +707,20 @@ namespace TOR_ChanceModifier {
                 return false;
             }
 
+            if (callId == Chance.ChaosModifierClearRpcId) {
+                if (!IsFromHost(__instance)) {
+                    ChancePlugin.Logger?.LogWarning($"[Chance] Rejected host-only RPC {callId} (ChaosModifierClear) from non-host sender {__instance?.PlayerId.ToString() ?? "?"} (owner {__instance?.OwnerId.ToString() ?? "?"}).");
+                    return false;
+                }
+                try {
+                    byte pid = reader.ReadByte();
+                    ChaosMode.ApplyChaosModifierClear(pid);
+                } catch (Exception e) {
+                    ChancePlugin.Logger?.LogError($"[Chaos] modifier-clear RPC apply failed: {e}");
+                }
+                return false;
+            }
+
             if (callId == Chance.ActivationRpcId) {
                 if (!IsFromHost(__instance)) {
                     ChancePlugin.Logger?.LogWarning($"[Chance] Rejected host-only RPC {callId} (Activation) from non-host sender {__instance?.PlayerId.ToString() ?? "?"} (owner {__instance?.OwnerId.ToString() ?? "?"}).");
@@ -821,6 +841,13 @@ namespace TOR_ChanceModifier {
         public static void Postfix(PlayerControl __instance) {
             if (!Chance.cooldownEnabled) return;
             if (!Chance.isChance(__instance.PlayerId)) return;
+            // BountyHunter has its own kill-cooldown logic in TOR's SetKillTimer prefix: a reduced
+            // cooldown (bountyKillCooldown, default 0) on a bounty kill and KillCooldown+punishmentTime
+            // otherwise, each drawn with its OWN display max. Re-clamping to the Chance cd here and
+            // re-issuing KillButton.SetCoolDown with a different max fought TORs values in the same frame
+            // (visible "0 -> jumps up" and a hijacked reduced bounty cooldown). Let TOR own this role's
+            // cooldown entirely; the Chance cooldown effect simply doesn't apply to a BountyHunter.
+            if (BountyHunter.bountyHunter != null && __instance == BountyHunter.bountyHunter) return;
             if (!Chance.cooldownMod.TryGetValue(__instance.PlayerId, out float cd)) return;
             // Das Clampen des killTimer gilt für jede Chance-Instanz; das HUD-Kill-Button gehört
             // aber nur dem LOKALEN Spieler. SetKillTimer wird von TOR auch für fremde Spieler

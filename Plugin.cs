@@ -187,6 +187,15 @@ namespace TOR_ChanceModifier {
                 new string[] { "All players", "Only Chance players" }, "All players",
                 ChanceOptions.chaosMode, false);
 
+            ChanceOptions.chaosModifierReroll = new CustomOption(
+                1146, Types.Modifier, "Chaos: Reroll Modifiers Too",
+                new string[] { "Off", "On" }, "Off", ChanceOptions.chaosMode, false);
+
+            ChanceOptions.chaosModifierScope = new CustomOption(
+                1147, Types.Modifier, "Chaos: Modifier Reroll Affects",
+                new string[] { "All players", "Only Chance players" }, "All players",
+                ChanceOptions.chaosModifierReroll, false);
+
             // Per-effect enable toggles (default Off → that effect stays vanilla). Each toggle is a
             // direct child of the Chance modifier, and its value option(s) are re-parented under the
             // toggle so they only appear once the effect is enabled. TOR's options menu hides an
