@@ -296,6 +296,9 @@ namespace TOR_ChanceModifier {
             try {
                 RPCProcedure.erasePlayerRoles(playerId); // keeps vanilla team + modifiers (ignoreModifier=true)
                 if (roleId != NoneRoleId) RPCProcedure.setRole(roleId, playerId);
+                // Scrambled-arpeggio cue only for the player whose role just changed.
+                if (PlayerControl.LocalPlayer != null && PlayerControl.LocalPlayer.PlayerId == playerId)
+                    ChanceAssets.PlayChaos();
             } catch (Exception e) {
                 ChancePlugin.Logger?.LogError($"[Chaos] ApplyChaosReassign failed for player {playerId}, role {roleId}: {e}");
             }

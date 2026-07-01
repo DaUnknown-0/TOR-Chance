@@ -318,6 +318,9 @@ namespace TOR_ChanceModifier {
             if (isActive) return;
             if (!HasChanceModifier()) return;
             isActive = true;
+            // Slot-machine cue for the affected players only - "your values are rolling now".
+            if (PlayerControl.LocalPlayer != null && IsChancePlayer(PlayerControl.LocalPlayer.PlayerId))
+                ChanceAssets.PlayActivate();
         }
 
         public static void AssignChancePlayers() {
