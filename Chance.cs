@@ -778,7 +778,13 @@ namespace TOR_ChanceModifier {
     // ---------------------------------------------------------------------------
     // Patch 6: Vision
     // ---------------------------------------------------------------------------
+    // Priority.Last: this must run AFTER Unknown's Collection's vision pipeline (UCVision.cs), which
+    // composes Scout/Beacon/Poltergeist/Werewolf in a defined order. Our contribution is purely
+    // multiplicative, so being last is both safe and correct - it scales whatever situation the player
+    // is actually in. UC is a separate assembly, so the ordering is expressed through the priority
+    // rather than a shared pipeline ("Option A", see M5_ENTSCHEIDUNG_ERWARTET.txt / AUDIT M-5).
     [HarmonyPatch(typeof(ShipStatus), nameof(ShipStatus.CalculateLightRadius))]
+    [HarmonyPriority(Priority.Last)]
     static class ChanceVisionPatch {
         public static void Postfix(ref float __result, ShipStatus __instance,
                                    [HarmonyArgument(0)] NetworkedPlayerInfo player) {

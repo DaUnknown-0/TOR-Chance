@@ -273,58 +273,14 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(PingTracker), nameof(PingTracker.Update))]
     [HarmonyPriority(Priority.Low)]
     static class ChanceVersionDisplayPatch {
-        // Credit toggle is shared across all three of our mods via a process-wide AppDomain flag
-        // (no cross-assembly references) — clicking any mod name flips the same flag, so clicking
-        // another hides it again. Keep this key string identical in the other mods.
-        private const string CreditKey = "TORMods.DaUnknownCreditVisible";
-
-        private static bool CreditVisible() =>
-            System.AppDomain.CurrentDomain.GetData(CreditKey) is bool b && b;
-
         public static void Postfix(PingTracker __instance) {
             if (__instance == null || __instance.text == null) return;
             string text = __instance.text.text;
             if (string.IsNullOrEmpty(text)) return;
 
-            // Click the mod name to toggle the shared credit line. PingTracker.text is a world-space
-            // TextMeshPro (no canvas), so the link raycast needs the rendering camera.
-            if (Input.GetMouseButtonDown(0)) {
-                Camera cam = Camera.main;
-                var canvas = __instance.text.canvas;
-                if (canvas != null)
-                    cam = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null
-                        : (canvas.worldCamera != null ? canvas.worldCamera : Camera.main);
-                int link = TMPro.TMP_TextUtilities.FindIntersectingLink(__instance.text, Input.mousePosition, cam);
-                if (link != -1 && __instance.text.textInfo.linkInfo[link].GetLinkID() == "chanceCredits")
-                    System.AppDomain.CurrentDomain.SetData(CreditKey, !CreditVisible());
-            }
-
-            // Clickable mod name, inserted just below the "TheOtherRoles vX" line.
-            // P2.3: Marker-Guard. TOR baut den Text jeden Frame neu auf, daher ist die Zeile
-            // normalerweise abwesend und wird eingefügt. Sollte TOR den Text künftig NICHT mehr neu
-            // bauen, verhinderte der Guard ein frame-weises Stapeln derselben Zeile.
-            if (!text.Contains("chanceCredits")) {
-                string chanceLine = $"<link=\"chanceCredits\"><color=#FF8C00>TOR - Unknown Chaos</color> v{VersionDisplay.Format(ChancePlugin.Version)}</link>";
-                int nl = text.IndexOf('\n');
-                text = nl >= 0
-                    ? text.Substring(0, nl + 1) + chanceLine + "\n" + text.Substring(nl + 1)
-                    : text + "\n" + chanceLine;
-            }
-
-            // Insert the shared credit under TOR's "Design by Bavari" line — but only if no other
-            // mod already added it this frame, so "Modded by DaUnknown" appears at most once.
-            if (CreditVisible() && !text.Contains("DaUnknown")) {
-                string credit = "\n<size=70%>Modded by <color=#FCCE03FF>DaUnknown</color></size>";
-                int anchor = text.IndexOf("Bavari");
-                if (anchor >= 0) {
-                    int lineEnd = text.IndexOf('\n', anchor);
-                    text = lineEnd >= 0
-                        ? text.Substring(0, lineEnd) + credit + text.Substring(lineEnd)
-                        : text + credit;
-                } else {
-                    text += credit;
-                }
-            }
+            string line = $"<color=#FF8C00>TOR - Unknown Chaos</color> v{VersionDisplay.Format(ChancePlugin.Version)}";
+            UnknownsCollective.Contribute(ChancePlugin.Id, line);
+            text = UnknownsCollective.Render(__instance.text, text);
 
             __instance.text.text = text;
         }
