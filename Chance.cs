@@ -332,10 +332,22 @@ namespace TOR_ChanceModifier {
             int rate = Mathf.Clamp((ChanceOptions.modifierChance?.getSelection() ?? 0) * 10, 0, 100); // 0..100 per slot
             // selection 0 corresponds to "1", hence +1
             int quantity = ChanceOptions.modifierChanceQuantity.getSelection() + 1;
-            var players = PlayerControl.AllPlayerControls.ToArray()
-                .Where(player => player != null && player.Data != null && !player.Data.IsDead)
-                .OrderBy(_ => Guid.NewGuid())
-                .ToList();
+            var candidates = PlayerControl.AllPlayerControls.ToArray()
+                .Where(player => player != null && player.Data != null && !player.Data.IsDead);
+
+            // AUDIT-2026-08-15: the Chance postfix on Helpers.checkMuderAttempt (and the speed/
+            // cooldown/report/vent/sabotage effects) only runs on clients that have this mod, so
+            // rolling a player without it just makes them kill at 100% while everything else stays
+            // vanilla. Restrict candidates to players the RPC 251 handshake confirms are on a
+            // matching version. Skip the filter when the handshake has no entries at all (offline/
+            // freeplay: nobody ever broadcasts) so we don't end up filtering out every candidate.
+            if (ChanceVersionHandshake.playerVersions.Count > 0) {
+                candidates = candidates.Where(player =>
+                    ChanceVersionHandshake.playerVersions.TryGetValue(player.OwnerId, out var pv)
+                    && ChancePlugin.Version.CompareTo(pv.version) == 0);
+            }
+
+            var players = candidates.OrderBy(_ => Guid.NewGuid()).ToList();
             int toAssign = Math.Min(quantity, players.Count);
 
             for (int i = 0; i < toAssign; i++) {
