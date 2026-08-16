@@ -993,7 +993,17 @@ namespace TOR_ChanceModifier {
                 if (!playerInfo.Disconnected && playerInfo.PlayerId != tp.PlayerId && !playerInfo.IsDead
                     && (!onlyCrewmates || !playerInfo.Role.IsImpostor)) {
                     PlayerControl @object = playerInfo.Object;
-                    if (untargetablePlayers != null && untargetablePlayers.Any(x => x == @object)) continue;
+                    // AUDIT-2026-08-16: manual loop instead of Any(x => x == @object) - the lambda closes
+                    // over @object, which changes every iteration, so LINQ allocated a fresh closure per
+                    // player checked here. ReferenceEquals keeps the same null-safe identity comparison
+                    // Il2Cpp object refs need, without the per-iteration allocation.
+                    if (untargetablePlayers != null) {
+                        bool isUntargetable = false;
+                        for (int i = 0; i < untargetablePlayers.Count; i++) {
+                            if (ReferenceEquals(untargetablePlayers[i], @object)) { isUntargetable = true; break; }
+                        }
+                        if (isUntargetable) continue;
+                    }
                     if (@object && (!@object.inVent || targetPlayersInVents)) {
                         Vector2 vector = @object.GetTruePosition() - truePosition;
                         float magnitude = vector.magnitude;
