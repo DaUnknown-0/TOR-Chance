@@ -1,4 +1,4 @@
-// TOR Chance Modifier - Copyright (C) 2026 DaUnknown-0
+﻿// TOR Chance Modifier - Copyright (C) 2026 DaUnknown-0
 // Licensed under GPL-3.0-or-later. See LICENSE for details.
 // Based on The Other Roles (https://github.com/TheOtherRolesAU/TheOtherRoles), GPL-3.0.
 
@@ -22,6 +22,11 @@ namespace TOR_ChanceModifier {
         // name; the value is stable. Used to push the new role through TOR's own RPC handler so it
         // reaches EVERY TOR client (the path the Shifter uses), not just clients with this mod.
         private const byte TorSetRoleRpcId = 104;
+
+        // TOR's CustomRPC.ErasePlayerRoles value, same reasoning as TorSetRoleRpcId above (the enum
+        // is internal, the value is stable). Sent BEFORE the SetRole RPC so the per-client order is
+        // erase -> set, matching what a chaos client does locally.
+        private const byte TorErasePlayerRolesRpcId = 139;
 
         private static bool processedThisMeeting;
 
@@ -274,6 +279,30 @@ namespace TOR_ChanceModifier {
             w.Write(playerId);
             w.Write(roleId);
             AmongUsClient.Instance.FinishRpcImmediately(w);
+
+            // Native TOR ErasePlayerRoles RPC (AUDIT C-1). Without it a client that has TOR but not
+            // this mod never heard about the erase: it only got the SetRole below, so the OLD role
+            // stayed alongside the new one and that player showed up as two roles for the rest of
+            // the round. It is also the only message that reaches such a client at all when the new
+            // role is "none/vanilla", which sends no SetRole.
+            //
+            // Sent to everyone, applied locally NOWHERE: TOR's own handler does
+            // erasePlayerRoles(target) AND Eraser.alreadyErased.Add(target) (RPC.cs:1515-1519), and
+            // this host must not take that second half. IsErased() reads exactly that set to decide
+            // who is excluded from future rerolls, so adding chaos-rerolled players to it would shut
+            // chaos mode down from the inside after the first meeting. The host therefore only does
+            // the erase itself, further down in ApplyChaosReassign.
+            //
+            // Accepted divergence, and the same one RoleControl.EraseTorRoleEverywhere already lives
+            // with: on every OTHER client the id does land in alreadyErased, so a player who is both
+            // Eraser and Guesser sees no shoot button on chaos-rerolled players. Cosmetic, and the
+            // alternative (a chaos-owned erased list) buys nothing else.
+            {
+                MessageWriter er = AmongUsClient.Instance.StartRpcImmediately(
+                    PlayerControl.LocalPlayer.NetId, TorErasePlayerRolesRpcId, Hazel.SendOption.Reliable, -1);
+                er.Write(playerId);
+                AmongUsClient.Instance.FinishRpcImmediately(er);
+            }
 
             // Native TOR SetRole RPC: pushes the new role through TOR's own handler so EVERY TOR
             // client applies it (the path the Shifter uses) — this is what makes ghosts on any
@@ -546,6 +575,19 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(TheOtherRoles.TheOtherRoles), "clearAndReloadRoles")]
     static class ChaosClearAndReloadPatch {
         public static void Postfix() => ChaosMode.Reset();
+    }
+
+    // AUDIT H-7: clearAndReloadRoles is a ROUND-START path. roleHistory is keyed by PlayerId, and
+    // PlayerIds are handed out per LOBBY, so entering a lobby without starting a round (or joining a
+    // host that does not drive that path) used to carry the previous game's history over: the end
+    // screen then credited whoever inherited that id with a role progression they never had.
+    // Same belt-and-suspenders rule the UC roles follow.
+    [HarmonyPatch(typeof(AmongUsClient), nameof(AmongUsClient.OnGameJoined))]
+    static class ChaosLobbyResetPatch {
+        public static void Postfix() {
+            try { ChaosMode.Reset(); }
+            catch (Exception e) { ChancePlugin.Logger?.LogError($"[Chaos] lobby reset failed: {e}"); }
+        }
     }
 
     // Bug 4: at game end, show the full role progression (e.g. "Sheriff → Medic → Mayor")

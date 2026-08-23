@@ -1,4 +1,4 @@
-// TOR Chance Modifier - Copyright (C) 2026 DaUnknown-0
+﻿// TOR Chance Modifier - Copyright (C) 2026 DaUnknown-0
 // Licensed under GPL-3.0-or-later. See LICENSE for details.
 // Based on The Other Roles (https://github.com/TheOtherRolesAU/TheOtherRoles), GPL-3.0.
 
@@ -775,7 +775,7 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(RoleInfo), nameof(RoleInfo.getRoleInfoForPlayer))]
     static class ChanceRoleInfoPatch {
         public static void Postfix(PlayerControl p, bool showModifier, List<RoleInfo> __result) {
-            if (showModifier && Chance.isChance(p.PlayerId)) {
+            if (p != null && showModifier && Chance.isChance(p.PlayerId)) {
                 __result.Add(new RoleInfo(
                     "Chance",
                     new Color32(255, 140, 0, byte.MaxValue),

@@ -1,4 +1,4 @@
-// TOR Chance Modifier - Copyright (C) 2026 DaUnknown-0
+﻿// TOR Chance Modifier - Copyright (C) 2026 DaUnknown-0
 // Licensed under GPL-3.0-or-later. See LICENSE for details.
 // Based on The Other Roles (https://github.com/TheOtherRolesAU/TheOtherRoles), GPL-3.0.
 
@@ -46,8 +46,15 @@ namespace TOR_ChanceModifier {
         public void Awake() {
             if (Instance) Destroy(Instance);
             Instance = this;
-            foreach (var file in Directory.GetFiles(Paths.PluginPath, "TOR-ChanceModifier.dll.old")) {
-                File.Delete(file);
+            // AUDIT-2026-08-23 (L-21): guarded. A .old still locked by a virus scanner, or a
+            // plugin folder this process cannot enumerate, threw straight out of Awake - which
+            // aborts the component's initialisation, so the updater silently did not exist for the
+            // rest of the session. Cleaning up a leftover file is not worth that.
+            try {
+                foreach (var file in Directory.GetFiles(Paths.PluginPath, "TOR-ChanceModifier.dll.old"))
+                    try { File.Delete(file); } catch { }
+            } catch (Exception e) {
+                ChancePlugin.Logger?.LogWarning($"[Chance] Could not clean up old plugin files: {e.Message}");
             }
         }
 
