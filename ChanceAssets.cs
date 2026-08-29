@@ -47,7 +47,18 @@ namespace TOR_ChanceModifier {
                 using Stream stream = assembly.GetManifestResourceStream(path);
                 if (stream == null) return null;
                 var bytes = new byte[stream.Length];
-                _ = stream.Read(bytes, 0, (int)stream.Length);
+                // AUDIT-2026-08-23, L-19, same shape as UCAssets/UTSAssets: a single Read() may
+                // return fewer bytes than asked. The tail of the buffer then stays zeroed and the
+                // clip is built at full length anyway, so the cue plays and cuts to silence part
+                // way through - easy to hear, hard to attribute. Bail out instead; callers
+                // already handle a null clip.
+                int got = 0;
+                while (got < bytes.Length) {
+                    int n = stream.Read(bytes, got, bytes.Length - got);
+                    if (n <= 0) break;
+                    got += n;
+                }
+                if (got != bytes.Length) return null;
                 float[] samples = new float[bytes.Length / 4];
                 for (int i = 0; i < samples.Length; i++)
                     samples[i] = (float)BitConverter.ToInt32(bytes, i * 4) / int.MaxValue;

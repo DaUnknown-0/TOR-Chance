@@ -273,16 +273,25 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(PingTracker), nameof(PingTracker.Update))]
     [HarmonyPriority(Priority.Low)]
     static class ChanceVersionDisplayPatch {
+        // PERF: constant name plus constant version, so this was the same string sixty times a
+        // second. Built once and held; nothing here can invalidate it.
+        private static string cachedLine;
+
         public static void Postfix(PingTracker __instance) {
             if (__instance == null || __instance.text == null) return;
             string text = __instance.text.text;
             if (string.IsNullOrEmpty(text)) return;
 
-            string line = $"<color=#FF8C00>TOR - Unknown Chaos</color> v{VersionDisplay.Format(ChancePlugin.Version)}";
-            UnknownsCollective.Contribute(ChancePlugin.Id, line);
+            cachedLine ??= $"<color=#FF8C00>TOR - Unknown Chaos</color> v{VersionDisplay.Format(ChancePlugin.Version)}";
+            UnknownsCollective.Contribute(ChancePlugin.Id, cachedLine);
             text = UnknownsCollective.Render(__instance.text, text);
 
-            __instance.text.text = text;
+            // PERF: TextMeshPro rebuilds its mesh on EVERY assignment to .text, even for an
+            // identical string. Six of our mods write this same field one after another each
+            // frame and Render() is idempotent within a frame, so at most one of those writes
+            // carries a change. See the same guard in the other five plugins.
+            if (!string.Equals(__instance.text.text, text, StringComparison.Ordinal))
+                __instance.text.text = text;
         }
     }
 }
