@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Performance-Durchgang über die Per-Frame-Pfade (Audit 2026-09-01)
+Kein Verhaltenswechsel; nur Arbeit gestrichen, die jeden Frame für ein unverändertes Ergebnis
+wiederholt wurde.
+- **Rollenanzeige** (`ChanceRoleInfoPatch`): pro Namensschild-Aufbau (jeden Frame für den eigenen
+  Spieler, als Geist für alle) wurden ein neues `RoleInfo`, eine `List<string>` und bis zu neun
+  formatierte Strings gebaut. Jetzt ein `RoleInfo` pro Chance-Spieler, neu nur wenn
+  `Chance.statsVersion` sich bewegt (Roll, Aktivierung, Reset, Range-Reload, Spieler weg) oder der
+  Impostor-Status des lokalen Spielers kippt.
+- **Sabotage-Cooldown** (`ChanceSabotageCooldownPatch`): das Sabotage-System wird einmal pro
+  `ShipStatus` aufgelöst statt per `TryCast`-Wrapper-Allokation jeden Frame.
+- **Lobby-Handshake** (`ChanceVersionHandshake.cs`): der AppDomain-Snapshot wird nur noch
+  veröffentlicht, wenn sich die Versionstabelle geändert hat (bisher jeden Lobby-Frame).
+- **Collective-HUD-Zeile** (`UnknownsCollective.cs`, in allen fünf Mods gleich): Block gecacht.
+- Null-Guard auf `AmongUsClient.Instance` im Aktivierungs-Tick.
+
 ### Chaos-Swap — Rollen-Interaktionen
 Audit der Rollen, die der Chaos-Reroll (`erasePlayerRoles` + `setRole` im Exile-WrapUp)
 beschädigen konnte. Details in `CHAOS_SWAP_INTERACTIONS.md`. Alle Fixes host-seitig in

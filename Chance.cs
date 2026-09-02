@@ -80,6 +80,13 @@ namespace TOR_ChanceModifier {
         public const int RoleIdValue = 58;   // Value after Shifter (57)
 
         public static List<PlayerControl> chanceList = new List<PlayerControl>();
+
+        // PERF: bumped whenever anything a player's Chance RoleInfo/description is built from
+        // changes (a roll landing, a player dropping out, activation, a reset, a range reload).
+        // ChanceRoleInfoPatch keys its per-player RoleInfo cache on it - getRoleInfoForPlayer runs
+        // per name-tag rebuild (every frame for the local player, for everyone once dead), and
+        // it used to build a fresh RoleInfo plus the whole description string on each call.
+        internal static int statsVersion;
         // P2.1: Spiegelt die PlayerIds aus chanceList als HashSet. IsChancePlayer wird per Frame und
         // Spieler aus PlayerPhysics.FixedUpdate, CalculateLightRadius, HudManager.Update und der
         // Kill-Target-Neuwahl aufgerufen — eine O(1)-Set-Prüfung ersetzt das O(n)-chanceList.Any(...).
@@ -159,6 +166,7 @@ namespace TOR_ChanceModifier {
         // Loads every min/max range, chance % and activation setting from the options and applies
         // the min≤max ordering + task cap. No runtime/dictionary state is touched.
         public static void ReloadRanges() {
+            statsVersion++;
             speedMin        = ChanceOptions.modifierChanceSpeedMin?.getFloat()        ?? 0.5f;
             speedMax        = ChanceOptions.modifierChanceSpeedMax?.getFloat()        ?? 2.5f;
             cooldownMin     = ChanceOptions.modifierChanceCooldownMin?.getFloat()     ?? 5f;
@@ -318,6 +326,7 @@ namespace TOR_ChanceModifier {
             if (isActive) return;
             if (!HasChanceModifier()) return;
             isActive = true;
+            statsVersion++;
             // Slot-machine cue for the affected players only - "your values are rolling now".
             if (PlayerControl.LocalPlayer != null && IsChancePlayer(PlayerControl.LocalPlayer.PlayerId))
                 ChanceAssets.PlayActivate();
@@ -441,6 +450,7 @@ namespace TOR_ChanceModifier {
         }
 
         public static void applyValues(byte id, ChanceRoll roll) {
+            statsVersion++;
             var p = Helpers.playerById(id);
             if (p != null && p.Data != null && !p.Data.Disconnected && !p.Data.IsDead && !chanceList.Any(x => x.PlayerId == id)) {
                 chanceList.Add(p);
@@ -467,6 +477,7 @@ namespace TOR_ChanceModifier {
                 .ToList();
 
             chanceList.RemoveAll(p => p == null || p.Data == null || p.Data.Disconnected || p.Data.IsDead);
+            if (removedIds.Count > 0) statsVersion++;
 
             foreach (byte id in removedIds) {
                 chanceIds.Remove(id);
@@ -630,7 +641,7 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(HudManager), nameof(HudManager.Update))]
     static class ChanceActivationTickPatch {
         public static void Postfix() {
-            if (!AmongUsClient.Instance.AmHost) return;
+            if (AmongUsClient.Instance == null || !AmongUsClient.Instance.AmHost) return;
             if (AmongUsClient.Instance.GameState != InnerNet.InnerNetClient.GameStates.Started) return;
             if (Chance.IsActive()) return;
             Chance.TryActivate();
@@ -774,16 +785,34 @@ namespace TOR_ChanceModifier {
     // ---------------------------------------------------------------------------
     [HarmonyPatch(typeof(RoleInfo), nameof(RoleInfo.getRoleInfoForPlayer))]
     static class ChanceRoleInfoPatch {
+        // One RoleInfo per Chance player, rebuilt only when Chance.statsVersion moves or the
+        // local player's Impostor status flips (the description's sabotage line depends on it).
+        // Before this, every call - per name-tag rebuild, i.e. per frame - allocated a RoleInfo,
+        // a List<string> and up to nine formatted strings.
+        private static readonly Dictionary<byte, RoleInfo> cache = new Dictionary<byte, RoleInfo>();
+        private static int cachedVersion = -1;
+        private static bool cachedLocalImpostor;
+
         public static void Postfix(PlayerControl p, bool showModifier, List<RoleInfo> __result) {
-            if (p != null && showModifier && Chance.isChance(p.PlayerId)) {
-                __result.Add(new RoleInfo(
+            if (p == null || !showModifier || __result == null || !Chance.isChance(p.PlayerId)) return;
+
+            bool localImpostor = PlayerControl.LocalPlayer?.Data?.Role?.IsImpostor == true;
+            if (cachedVersion != Chance.statsVersion || cachedLocalImpostor != localImpostor) {
+                cache.Clear();
+                cachedVersion = Chance.statsVersion;
+                cachedLocalImpostor = localImpostor;
+            }
+            if (!cache.TryGetValue(p.PlayerId, out var info)) {
+                info = new RoleInfo(
                     "Chance",
                     new Color32(255, 140, 0, byte.MaxValue),
                     "You are CHAOS!",
                     Chance.GetChanceShortDescription(p.PlayerId),
                     (RoleId)Chance.RoleIdValue,
-                    isNeutral: false, isModifier: true));
+                    isNeutral: false, isModifier: true);
+                cache[p.PlayerId] = info;
             }
+            __result.Add(info);
         }
     }
 
@@ -1045,14 +1074,28 @@ namespace TOR_ChanceModifier {
     // ---------------------------------------------------------------------------
     [HarmonyPatch(typeof(HudManager), nameof(HudManager.Update))]
     static class ChanceSabotageCooldownPatch {
+        // PERF: the sabotage system is resolved once per ShipStatus instance. The Systems lookup
+        // plus TryCast allocated a fresh Il2Cpp wrapper every frame; the system itself lives as
+        // long as the ship, and the UnityEngine.Object compare is false for a destroyed ship, so
+        // a new map resolves again by itself.
+        private static ShipStatus cachedShip;
+        private static SabotageSystemType cachedSab;
+
         public static void Postfix() {
             if (!Chance.sabotageEnabled) return;
             var ship = ShipStatus.Instance;
             if (ship == null) return;
             try {
-                if (!ship.Systems.TryGetValue(SystemTypes.Sabotage, out var sys)) return;
-                var sab = sys.TryCast<SabotageSystemType>();
-                if (sab == null) return;
+                SabotageSystemType sab;
+                if (cachedSab != null && cachedShip == ship) {
+                    sab = cachedSab;
+                } else {
+                    if (ship.Systems == null || !ship.Systems.TryGetValue(SystemTypes.Sabotage, out var sys)) return;
+                    sab = sys.TryCast<SabotageSystemType>();
+                    if (sab == null) return;
+                    cachedShip = ship;
+                    cachedSab = sab;
+                }
 
                 float? targetCd = null;
 

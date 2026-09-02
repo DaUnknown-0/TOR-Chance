@@ -68,7 +68,13 @@ namespace TOR_ChanceModifier {
         private static void Receive(int major, int minor, int build, int revision, Guid guid, int clientId) {
             Version ver = revision < 0 ? new Version(major, minor, build) : new Version(major, minor, build, revision);
             playerVersions[clientId] = new PlayerVersion(ver, guid);
+            snapshotDirty = true;
         }
+
+        // PERF: the AppDomain snapshot (a dictionary, a string per player, a Split of the
+        // registry) was rebuilt every lobby frame; the table it mirrors changes a handful of
+        // times per lobby. Same gate Unknown's Collection already uses.
+        private static bool snapshotDirty = true;
 
         // Builds the red warning text for any client that lacks this mod or has a different build.
         // Returns "" when every connected player matches.
@@ -112,7 +118,9 @@ namespace TOR_ChanceModifier {
 
         private static void PublishSnapshot() {
             try {
+                if (!snapshotDirty) return;
                 if (AmongUsClient.Instance == null) return;
+                snapshotDirty = false;
                 var status = new Dictionary<int, string>();
                 foreach (var kv in playerVersions) {
                     PlayerVersion pv = kv.Value;
@@ -143,6 +151,7 @@ namespace TOR_ChanceModifier {
         static class OnGameJoinedPatch {
             public static void Postfix() {
                 playerVersions.Clear();
+                snapshotDirty = true;
                 versionSent = false;
             }
         }
