@@ -63,6 +63,17 @@ namespace TOR_ChanceModifier
 
         public ChanceLobbyPasswordGate(IntPtr ptr) : base(ptr) { }
 
+        // NEVER read GameStartManager.Instance as a question. The getter is Among Us' own
+        // DestroyableSingleton and CONSTRUCTS an instance when none exists — a blank
+        // GameStartManager with every serialized field null, whose Start()/Update() then throw
+        // natively every frame (see UsefulTORStuff/LobbyLeakGuard.cs, LobbyScreen.Exists for the
+        // full writeup). InstanceExists reads the backing field and constructs nothing.
+        private static bool LobbyExists()
+        {
+            try { return DestroyableSingleton<GameStartManager>.InstanceExists; }
+            catch { return false; }
+        }
+
         public void Awake()
         {
             if (Instance != null) Destroy(Instance);
@@ -80,7 +91,7 @@ namespace TOR_ChanceModifier
 
             // Left the lobby / returned to the menu: the GameStartManager.Update postfix that drives
             // this panel stops firing, so close it here and unfreeze. Unlock state is kept.
-            if (_panel != null && _panel.activeSelf && GameStartManager.Instance == null)
+            if (_panel != null && _panel.activeSelf && !LobbyExists())
             {
                 HidePanel();
                 return;

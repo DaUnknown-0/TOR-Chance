@@ -39,12 +39,18 @@ namespace TOR_ChanceModifier {
             writer.Write((byte)v.Minor);
             writer.Write((byte)v.Build);
             writer.WritePacked(AmongUsClient.Instance.ClientId);
-            writer.Write((byte)(v.Revision < 0 ? 0xFF : v.Revision));
+            // 0xFF is the "no revision" sentinel. Clamp a real revision to 254 so a genuine .255
+            // build can't collide with it and get misread as a stable build on receive. The local
+            // self-entry below must see the same clamped value, sonst weicht der eigene Eintrag
+            // von dem ab, was andere Clients ueber uns empfangen (Revision > 254 wuerde sich sonst
+            // selbst als "neuere/aeltere" Version melden).
+            int clampedRevision = v.Revision < 0 ? -1 : Math.Min(v.Revision, 254);
+            writer.Write((byte)(clampedRevision < 0 ? 0xFF : clampedRevision));
             writer.Write(Assembly.GetExecutingAssembly().ManifestModule.ModuleVersionId.ToByteArray());
             AmongUsClient.Instance.FinishRpcImmediately(writer);
 
             // Apply locally too (the sender never receives its own broadcast).
-            Receive(v.Major, v.Minor, v.Build, v.Revision, Assembly.GetExecutingAssembly().ManifestModule.ModuleVersionId, AmongUsClient.Instance.ClientId);
+            Receive(v.Major, v.Minor, v.Build, clampedRevision, Assembly.GetExecutingAssembly().ManifestModule.ModuleVersionId, AmongUsClient.Instance.ClientId);
         }
 
         // Reads the RPC 251 payload (called from ChanceHandleRpcPatch).

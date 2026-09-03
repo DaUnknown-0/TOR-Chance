@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using HarmonyLib;
 using Hazel;
 using UnityEngine;
@@ -122,6 +123,11 @@ namespace TOR_ChanceModifier {
         //     Sheriff while a living Deputy can still promote avoids the reroll racing that promotion.
         // Guesser (Nice/Evil) is excluded because erasePlayerRoles always clears Guesser charges,
         // permanently removing the guess ability even though the role isn't in any pool.
+        // Unknown's Collection roles (Tesla, Saboteur, Scout, Witness, Hunter, ...) are excluded for
+        // the same reason as the roles above: they're not TOR roles at all, so they hang off none of
+        // the chaos pools and don't sit behind erasePlayerRoles either. Rerolling such a player would
+        // leave their UC role standing and hand them a TOR role on top of it (double role). See
+        // HasUcRole below.
         private static bool isProtectedFromReroll(PlayerControl p) {
             if (p == null) return false;
             if (p == Godfather.godfather) return true;
@@ -131,6 +137,52 @@ namespace TOR_ChanceModifier {
             if (Guesser.isGuesser(p.PlayerId)) return true;
             if (p == Sheriff.sheriff && Deputy.deputy != null && Deputy.deputy.Data != null
                 && !Deputy.deputy.Data.IsDead) return true;
+            if (HasUcRole(p)) return true;
+            return false;
+        }
+
+        // ---------------------------------------------------------------------------
+        // UC role detection, reflection only. Unknown's Collection is a separate, optional mod and
+        // must not be referenced at compile time (same convention as
+        // ForceImpostorMod/PlayerTuningBridge.cs). Members are resolved once, lazily, and every
+        // lookup fails closed (false) when UC isn't loaded or its API shape has changed, so a
+        // UC-less lobby or an older UC build never crashes the reroll, it just doesn't protect
+        // anything extra.
+        // ---------------------------------------------------------------------------
+        private static bool ucResolved;
+        private static MethodInfo ucIsClaimed;   // UnknownsCollection.UCPromotion.IsClaimed(byte) -> bool
+        private static FieldInfo ucHunterField;  // UnknownsCollection.Hunter.hunter (static PlayerControl)
+
+        private static void ResolveUc() {
+            if (ucResolved) return;
+            ucResolved = true;
+            try {
+                var asm = AppDomain.CurrentDomain.GetAssemblies()
+                    .FirstOrDefault(a => a.GetName().Name == "UnknownsCollection");
+                if (asm == null) return;
+
+                var promotionType = asm.GetType("UnknownsCollection.UCPromotion");
+                ucIsClaimed = promotionType?.GetMethod("IsClaimed", BindingFlags.Public | BindingFlags.Static);
+
+                // Hunter promotes outside UCPromotion's claim table, so IsClaimed alone misses it.
+                var hunterType = asm.GetType("UnknownsCollection.Hunter");
+                ucHunterField = hunterType?.GetField("hunter", BindingFlags.Public | BindingFlags.Static);
+            } catch (Exception e) {
+                ChancePlugin.Logger?.LogWarning($"[Chaos] UC reflection lookup failed: {e.Message}");
+            }
+        }
+
+        // True while p currently holds a UC role (claimed via UCPromotion, or is the Hunter).
+        private static bool HasUcRole(PlayerControl p) {
+            if (p == null) return false;
+            ResolveUc();
+            try {
+                if (ucIsClaimed != null && (bool)ucIsClaimed.Invoke(null, new object[] { p.PlayerId })) return true;
+            } catch { }
+            try {
+                if (ucHunterField != null && ucHunterField.GetValue(null) is PlayerControl hunter
+                    && hunter == p) return true;
+            } catch { }
             return false;
         }
 
@@ -433,6 +485,10 @@ namespace TOR_ChanceModifier {
 
             var participants = PlayerControl.AllPlayerControls.ToArray()
                 .Where(p => p != null && p.Data != null && !p.Data.Disconnected && !p.Data.IsDead && p.Data.Role != null)
+                // UC roles carry their own modifier-like mechanics outside TOR's primary-modifier
+                // slots; handing a UC-role holder a TOR modifier on top would be a double role, same
+                // reasoning as isProtectedFromReroll above.
+                .Where(p => !HasUcRole(p))
                 .ToList();
             if (OnlyChanceModifierScope())
                 participants = participants.Where(p => Chance.IsChancePlayer(p.PlayerId)).ToList();

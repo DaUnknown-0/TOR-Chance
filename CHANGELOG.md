@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Bug- und Perf-Audit 2026-09-03
+- `ChaosMode.cs`: Spieler mit einer Rolle aus Unknown's Collection wurden mitgerollt, behielten
+  die UC-Rolle und bekamen zusätzlich eine TOR-Rolle (Doppelrolle). Jetzt per Reflection
+  (`UCPromotion.IsClaimed`, Sonderfall Hunter) vom Rollen- und Modifier-Reroll ausgenommen.
+- `ChanceLobbyPasswordGate.cs`: `GameStartManager.Instance` als Existenzfrage erzeugte eine
+  Phantom-Instanz beim Verlassen der Lobby; jetzt `InstanceExists`.
+- `ChanceVersionHandshake.cs`: Revision auf 254 geklammert (0xFF ist Sentinel), Eigen- und
+  Fremdeintrag konsistent.
+- `ChanceModUpdater.cs`: fehlgeschlagener Schreibvorgang wurde als Erfolg gemeldet, obwohl die
+  alte DLL bereits nach `.old` verschoben war; jetzt `IsCompletedSuccessfully`-Prüfung,
+  try/catch um `Move`, Rollback, Löschen einer halb geschriebenen Datei, Null-Guard für das
+  Release-Asset.
+
 ### Performance-Durchgang über die Per-Frame-Pfade (Audit 2026-09-01)
 Kein Verhaltenswechsel; nur Arbeit gestrichen, die jeden Frame für ein unverändertes Ergebnis
 wiederholt wurde.
