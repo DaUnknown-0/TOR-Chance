@@ -159,6 +159,7 @@ namespace TOR_ChanceModifier {
             meetingEndedThisMeeting = false;
             rangeSyncInProgress = false;
             isActive = false;
+            rollSpent = false;
             reportCheckTimer = 0f;
             lastSabTimer = -1f;
         }
@@ -267,8 +268,13 @@ namespace TOR_ChanceModifier {
             return IsActive() && chanceIds.Contains(playerId);
         }
 
+        // The spawn roll happens ONCE per round. A roll that hit nobody used to leave isActive false,
+        // so the per-frame activation tick rolled again every frame until someone got Chance - a 10 %
+        // spawn rate behaved like 100 % (Opus audit 2026-10-02).
+        private static bool rollSpent;
+
         public static bool TryActivate() {
-            if (IsActive() || !HasChanceModifier()) return false;
+            if (IsActive() || !HasChanceModifier() || rollSpent) return false;
             if (activationMode == 0 || GetActivationThreshold() <= 0f) {
                 Activate();
                 return true;
@@ -312,7 +318,7 @@ namespace TOR_ChanceModifier {
 
             if (AmongUsClient.Instance?.AmHost == true) {
                 AssignChancePlayers();
-                if (chanceList.Count == 0) return;
+                if (chanceList.Count == 0) { rollSpent = true; return; }
 
                 MessageWriter writer = AmongUsClient.Instance.StartRpcImmediately(
                     PlayerControl.LocalPlayer.NetId, ActivationRpcId, Hazel.SendOption.Reliable, -1);
@@ -630,8 +636,8 @@ namespace TOR_ChanceModifier {
     // Patch 3: Assign modifier (after the existing RoleManager.SelectRoles patch)
     // ---------------------------------------------------------------------------
     [HarmonyPatch(typeof(RoleManager), nameof(RoleManager.SelectRoles))]
-    [HarmonyPriority(Priority.Low)]
     static class ChanceAssignPatch {
+        [HarmonyPriority(Priority.Low)]
         public static void Postfix() {
             if (!AmongUsClient.Instance.AmHost) return;
             Chance.TryActivate();
@@ -675,16 +681,12 @@ namespace TOR_ChanceModifier {
         public static void Postfix() => Chance.OnMeetingEnded();
     }
 
-    [HarmonyPatch(typeof(AirshipExileController), nameof(AirshipExileController.WrapUpAndSpawn))]
-    static class ChanceAirshipExileWrapUpPatch {
-        public static void Postfix() => Chance.OnMeetingEnded();
-    }
+    // Airship: deferred until the exiled player is really dead, see AirshipExileDefer (ChaosMode.cs).
 
     // ---------------------------------------------------------------------------
     // Patch 4: Receive RPC (Prefix with high priority → before the TOR switch handler)
     // ---------------------------------------------------------------------------
     [HarmonyPatch(typeof(PlayerControl), nameof(PlayerControl.HandleRpc))]
-    [HarmonyPriority(Priority.High)]
     static class ChanceHandleRpcPatch {
         // RPCs 200 (SetValues), 201 (ChaosReassign) und 250 (Activation) sind host-autoritativ:
         // sie re-rollen Rollen/Stats für ALLE Spieler bzw. setzen Kill-Cooldowns. Würden sie von
@@ -695,6 +697,7 @@ namespace TOR_ChanceModifier {
             sender != null && AmongUsClient.Instance != null
             && sender.OwnerId == AmongUsClient.Instance.HostId;
 
+        [HarmonyPriority(Priority.High)]
         public static bool Prefix(byte callId, MessageReader reader, PlayerControl __instance) {
             if (callId == Chance.RpcId) {
                 if (!IsFromHost(__instance)) {
@@ -825,8 +828,8 @@ namespace TOR_ChanceModifier {
     // is actually in. UC is a separate assembly, so the ordering is expressed through the priority
     // rather than a shared pipeline ("Option A", see M5_ENTSCHEIDUNG_ERWARTET.txt / AUDIT M-5).
     [HarmonyPatch(typeof(ShipStatus), nameof(ShipStatus.CalculateLightRadius))]
-    [HarmonyPriority(Priority.Last)]
     static class ChanceVisionPatch {
+        [HarmonyPriority(Priority.Last)]
         public static void Postfix(ref float __result, ShipStatus __instance,
                                    [HarmonyArgument(0)] NetworkedPlayerInfo player) {
             if (!Chance.visionEnabled) return;
@@ -867,8 +870,8 @@ namespace TOR_ChanceModifier {
     // Patch 8: Speed (Postfix on PlayerPhysics.FixedUpdate)
     // ---------------------------------------------------------------------------
     [HarmonyPatch(typeof(PlayerPhysics), nameof(PlayerPhysics.FixedUpdate))]
-    [HarmonyPriority(Priority.Last)]
     static class ChanceSpeedPatch {
+        [HarmonyPriority(Priority.Last)]
         public static void Postfix(PlayerPhysics __instance) {
             if (!Chance.speedEnabled) return;
             if (!__instance.AmOwner) return;
@@ -888,7 +891,13 @@ namespace TOR_ChanceModifier {
     // ---------------------------------------------------------------------------
     [HarmonyPatch(typeof(PlayerControl), nameof(PlayerControl.SetKillTimer))]
     static class ChanceKillCooldownPatch {
-        public static void Postfix(PlayerControl __instance) {
+        // TOR's prefix clamps every SetKillTimer value to the lobby cooldown, so the old postfix could
+        // only ever shorten it: a 45 s roll in a 25 s lobby did nothing but draw a wrong max (Opus audit
+        // 2026-10-02). The timer before the call tells a restart (after a kill or meeting: the new value
+        // is higher) from the per-tick countdown (lower), and the requested value is used, not TOR's clamp.
+        public static void Prefix(PlayerControl __instance, out float __state) => __state = __instance != null ? __instance.killTimer : 0f;
+
+        public static void Postfix(PlayerControl __instance, [HarmonyArgument(0)] float time, float __state) {
             if (!Chance.cooldownEnabled) return;
             if (!Chance.isChance(__instance.PlayerId)) return;
             // BountyHunter has its own kill-cooldown logic in TOR's SetKillTimer prefix: a reduced
@@ -903,7 +912,14 @@ namespace TOR_ChanceModifier {
             // aber nur dem LOKALEN Spieler. SetKillTimer wird von TOR auch für fremde Spieler
             // aufgerufen — ohne AmOwner-Gate zeigte der eigene Button fremde Cooldowns an und
             // NRE'te vor HUD-Existenz (P1.3).
-            __instance.killTimer = Mathf.Clamp(__instance.killTimer, 0f, cd);
+            bool restart = time > __state + 0.001f;
+            if (restart) {
+                // proportional, so the shorter first-round timer keeps its share of the rolled cooldown
+                float lobby = GameOptionsManager.Instance?.currentNormalGameOptions?.KillCooldown ?? 0f;
+                __instance.killTimer = lobby > 0.01f ? Mathf.Clamp(time * cd / lobby, 0f, cd) : cd;
+            } else {
+                __instance.killTimer = Mathf.Clamp(time, 0f, cd);
+            }
             if (__instance.AmOwner && HudManager.Instance != null)
                 HudManager.Instance.KillButton.SetCoolDown(__instance.killTimer, cd);
         }
@@ -1165,6 +1181,22 @@ namespace TOR_ChanceModifier {
         // so it would NOT map to that argument — we grab the MeetingHud via the positional injection
         // "__0", falling back to MeetingHud.Instance so a null "__0" can't silently disable the
         // multiplier (the actual cause of x0/x2/x3 not affecting the count).
+        private static byte SwappedKey(MeetingHud hud, byte votedFor) {
+            try {
+                if (Swapper.swapper == null || Swapper.swapper.Data == null || Swapper.swapper.Data.IsDead) return votedFor;
+                byte a = Swapper.playerId1, b = Swapper.playerId2;
+                if (a == byte.MaxValue || b == byte.MaxValue) return votedFor;
+                bool hasA = false, hasB = false;
+                foreach (var ps in hud.playerStates) {
+                    if (ps == null) continue;
+                    if (ps.TargetPlayerId == a) hasA = true;
+                    if (ps.TargetPlayerId == b) hasB = true;
+                }
+                if (!hasA || !hasB) return votedFor;   // TOR only swaps when both areas exist
+                return votedFor == a ? b : votedFor == b ? a : votedFor;
+            } catch { return votedFor; }
+        }
+
         public static void Postfix(MeetingHud __0, ref Dictionary<byte, int> __result) {
             var hud = __0 ?? MeetingHud.Instance;
             bool active = Chance.IsActive();
@@ -1180,6 +1212,10 @@ namespace TOR_ChanceModifier {
                 if (votedFor == 252 || votedFor == 254 || votedFor == 255) continue; // skip / no-vote / dead
                 byte voterId = (byte)pva.TargetPlayerId;
                 if (!Chance.IsChancePlayer(voterId)) continue;
+                // TOR swapped the Swapper's two totals inside CalculateVotes already, so the vote for A
+                // now sits under B: apply the multiplier there, matching the icons TOR draws on B
+                // (Opus audit 2026-10-02).
+                votedFor = SwappedKey(hud, votedFor);
                 if (!Chance.voteMultiplierMod.TryGetValue(voterId, out byte mult)) continue;
 
                 int baseVotes = (Mayor.mayor != null && Mayor.mayor.PlayerId == voterId && Mayor.voteTwice) ? 2 : 1;

@@ -180,8 +180,8 @@ namespace TOR_ChanceModifier {
         // Runs after TOR's own GameStartManager.Update postfix (Priority.Low) so we can append the
         // Chance warning to the GameStartText TOR rebuilds each frame, instead of fighting over it.
         [HarmonyPatch(typeof(GameStartManager), nameof(GameStartManager.Update))]
-        [HarmonyPriority(Priority.Low)]
         static class GameStartManagerUpdatePatch {
+            [HarmonyPriority(Priority.Low)]
             public static void Postfix(GameStartManager __instance) {
                 if (PlayerControl.LocalPlayer != null && !versionSent) {
                     versionSent = true;

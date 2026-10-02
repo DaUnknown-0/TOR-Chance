@@ -81,6 +81,7 @@ namespace TOR_ChanceModifier {
         };
 
         public static void Reset() {
+            AirshipExileDefer.Clear();   // a game that ended during the Airship exile must not carry it over
             processedThisMeeting = false;
             historyInitialized = false;
             roleHistory.Clear();
@@ -617,15 +618,51 @@ namespace TOR_ChanceModifier {
     // Deputy promotion check. The reroll's erasePlayerRoles → clearAndReload would otherwise wipe
     // those lists first, so the (ex-)Seer/Medium would lose the souls for this meeting's deaths.
     [HarmonyPatch(typeof(ExileController), nameof(ExileController.WrapUp))]
-    [HarmonyPriority(Priority.Low)]
     static class ChaosExileWrapUpPatch {
+        [HarmonyPriority(Priority.Low)]
         public static void Postfix() => ChaosMode.OnMeetingEnded();
     }
 
+    // AIRSHIP (Opus audit 2026-10-02): WrapUpAndSpawn is a COROUTINE - a postfix runs when the
+    // enumerator is created, before its body exiles anyone, so the reroll saw the exiled player alive
+    // and could hand him a role. The postfix now only arms AirshipExileDefer; the reroll (and Chance's
+    // re-randomize) run from its tick once the exiled player is really dead.
     [HarmonyPatch(typeof(AirshipExileController), nameof(AirshipExileController.WrapUpAndSpawn))]
-    [HarmonyPriority(Priority.Low)]
     static class ChaosAirshipExileWrapUpPatch {
-        public static void Postfix() => ChaosMode.OnMeetingEnded();
+        [HarmonyPriority(Priority.Low)]
+        public static void Postfix(AirshipExileController __instance) => AirshipExileDefer.Arm(__instance);
+    }
+
+    internal static class AirshipExileDefer {
+        private static bool pending;
+        private static NetworkedPlayerInfo exiled;
+        private static float giveUpAt;
+
+        internal static void Clear() { pending = false; exiled = null; }
+
+        internal static void Arm(ExileController ec) {
+            try { exiled = ec != null && ec.initData != null ? ec.initData.networkedPlayer : null; } catch { exiled = null; }
+            pending = true;
+            giveUpAt = Time.time + 15f;   // never hang: run anyway if the death somehow never shows
+        }
+
+        [HarmonyPatch(typeof(HudManager), nameof(HudManager.Update))]
+        static class TickPatch {
+            public static void Postfix() {
+                if (!pending) return;
+                try {
+                    bool dead = exiled == null || exiled.IsDead || exiled.Disconnected;
+                    if (!dead && Time.time < giveUpAt) return;
+                    pending = false;
+                    exiled = null;
+                    ChaosMode.OnMeetingEnded();
+                    Chance.OnMeetingEnded();
+                } catch (Exception e) {
+                    pending = false;
+                    ChancePlugin.Logger?.LogError($"[Chaos] deferred Airship wrap-up failed: {e}");
+                }
+            }
+        }
     }
 
     [HarmonyPatch(typeof(TheOtherRoles.TheOtherRoles), "clearAndReloadRoles")]
@@ -669,10 +706,10 @@ namespace TOR_ChanceModifier {
     // letzte (finale) Rolle bleibt immer stehen. Breitere Bildschirme zeigen also mehr Rollen.
     // Priority.Low: läuft nach TORs SetEverythingUp-Postfix, das das Summary-Objekt erst baut.
     [HarmonyPatch(typeof(EndGameManager), nameof(EndGameManager.SetEverythingUp))]
-    [HarmonyPriority(Priority.Low)]
     static class ChaosHistorySummaryTrimPatch {
         private const string SummaryMarker = "Players and roles at the end of the game:";
 
+        [HarmonyPriority(Priority.Low)]
         public static void Postfix() {
             try {
                 var histories = ChaosMode.AllHistories;

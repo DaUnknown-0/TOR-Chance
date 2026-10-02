@@ -23,7 +23,7 @@ namespace TOR_ChanceModifier {
     [BepInProcess("Among Us.exe")]
     public class ChancePlugin : BasePlugin {
         public const string Id = "com.tormod.chancemodifier";
-        public const string VersionString = "1.2.23";
+        public const string VersionString = "1.2.23.1";
         public static System.Version Version = System.Version.Parse(VersionString);
 
         public static BepInEx.Logging.ManualLogSource Logger;
@@ -271,12 +271,12 @@ namespace TOR_ChanceModifier {
     // Show the Chance Modifier version directly below the "TheOtherRoles vX" line in the
     // top corner version display. Runs after TOR's own PingTracker postfix.
     [HarmonyPatch(typeof(PingTracker), nameof(PingTracker.Update))]
-    [HarmonyPriority(Priority.Low)]
     static class ChanceVersionDisplayPatch {
         // PERF: constant name plus constant version, so this was the same string sixty times a
         // second. Built once and held; nothing here can invalidate it.
         private static string cachedLine;
 
+        [HarmonyPriority(Priority.Low)]
         public static void Postfix(PingTracker __instance) {
             if (__instance == null || __instance.text == null) return;
             string text = __instance.text.text;
