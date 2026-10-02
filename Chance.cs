@@ -632,6 +632,15 @@ namespace TOR_ChanceModifier {
         public static void Postfix() => Chance.clearAndReload();
     }
 
+    // Second hook on resetVariables, which calls clearAndReloadRoles itself (RPC.cs:190). Both are
+    // managed TOR methods whose detours can silently drop under tiered compilation; with two hooks one
+    // surviving is enough, and UTS' ResetSafetyNet re-runs resetVariables postfixes when that one
+    // dropped too (reviews 2026-10-02). The reset is idempotent, running twice costs nothing.
+    [HarmonyPatch(typeof(RPCProcedure), nameof(RPCProcedure.resetVariables))]
+    static class ChanceResetVariablesPatch {
+        public static void Postfix() => Chance.clearAndReload();
+    }
+
     // ---------------------------------------------------------------------------
     // Patch 3: Assign modifier (after the existing RoleManager.SelectRoles patch)
     // ---------------------------------------------------------------------------
@@ -1197,6 +1206,11 @@ namespace TOR_ChanceModifier {
             } catch { return votedFor; }
         }
 
+        internal static bool VoterAlive(byte id) {
+            var p = TheOtherRoles.Helpers.playerById(id);
+            return p != null && p.Data != null && !p.Data.IsDead && !p.Data.Disconnected;
+        }
+
         public static void Postfix(MeetingHud __0, ref Dictionary<byte, int> __result) {
             var hud = __0 ?? MeetingHud.Instance;
             bool active = Chance.IsActive();
@@ -1212,6 +1226,10 @@ namespace TOR_ChanceModifier {
                 if (votedFor == 252 || votedFor == 254 || votedFor == 255) continue; // skip / no-vote / dead
                 byte voterId = (byte)pva.TargetPlayerId;
                 if (!Chance.IsChancePlayer(voterId)) continue;
+                // TOR skips the votes of players who died (a guess) or left during the meeting
+                // (MeetingPatch.cs CalculateVotes); so must the multiplier, or it subtracts from / adds
+                // to a vote TOR never counted (reviews 2026-10-02).
+                if (!VoterAlive(voterId)) continue;
                 // TOR swapped the Swapper's two totals inside CalculateVotes already, so the vote for A
                 // now sits under B: apply the multiplier there, matching the icons TOR draws on B
                 // (Opus audit 2026-10-02).
@@ -1305,7 +1323,8 @@ namespace TOR_ChanceModifier {
                     // Default: copy the entry as-is (one icon). Skip codes TOR/Chance never multiply
                     // (no-vote / dead) — mirrors the count postfix exclusions.
                     int entries = 1;
-                    bool multiplied = votedFor != 252 && votedFor != 254 && votedFor != 255;
+                    bool multiplied = votedFor != 252 && votedFor != 254 && votedFor != 255
+                                      && ChanceVoteMultiplierPatch.VoterAlive(voterId);   // same skip as the count
                     if (multiplied && Chance.IsChancePlayer(voterId)
                         && Chance.voteMultiplierMod.TryGetValue(voterId, out byte mult)) {
                         int mayorBase = (Mayor.mayor != null && Mayor.mayor.PlayerId == voterId && Mayor.voteTwice) ? 2 : 1;

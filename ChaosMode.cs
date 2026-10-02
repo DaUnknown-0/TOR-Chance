@@ -372,9 +372,15 @@ namespace TOR_ChanceModifier {
         }
 
         public static void ApplyChaosReassign(byte playerId, byte roleId) {
+            // The starting roles are snapshotted BEFORE the first reroll touches anybody: taken after
+            // it, the first rerolled player's history began with his new role (reviews 2026-10-02).
+            // Best-effort, in its own try, so it can never block the reassignment below.
+            try { EnsureHistoryInitialized(); }
+            catch (Exception e) { ChancePlugin.Logger?.LogError($"[Chaos] role-history snapshot failed: {e}"); }
+
             // The actual role change must always run on every client (this is what ghosts read
-            // live for the role label), so it gets its own try-catch and runs FIRST. The
-            // end-of-game history is best-effort and must never be able to block the reassignment.
+            // live for the role label), so it gets its own try-catch. The end-of-game history is
+            // best-effort and must never be able to block the reassignment.
             try {
                 RPCProcedure.erasePlayerRoles(playerId); // keeps vanilla team + modifiers (ignoreModifier=true)
                 if (roleId != NoneRoleId) RPCProcedure.setRole(roleId, playerId);
@@ -386,7 +392,6 @@ namespace TOR_ChanceModifier {
             }
 
             try {
-                EnsureHistoryInitialized();
                 RecordCurrentRole(playerId);
             } catch (Exception e) {
                 ChancePlugin.Logger?.LogError($"[Chaos] role-history update failed for player {playerId}: {e}");
@@ -667,6 +672,12 @@ namespace TOR_ChanceModifier {
 
     [HarmonyPatch(typeof(TheOtherRoles.TheOtherRoles), "clearAndReloadRoles")]
     static class ChaosClearAndReloadPatch {
+        public static void Postfix() => ChaosMode.Reset();
+    }
+
+    // Second hook on resetVariables (see ChanceResetVariablesPatch in Chance.cs for why).
+    [HarmonyPatch(typeof(RPCProcedure), nameof(RPCProcedure.resetVariables))]
+    static class ChaosResetVariablesPatch {
         public static void Postfix() => ChaosMode.Reset();
     }
 

@@ -159,6 +159,7 @@ namespace TOR_ChanceModifier {
                 playerVersions.Clear();
                 snapshotDirty = true;
                 versionSent = false;
+                ArmReshares();
             }
         }
 
@@ -166,6 +167,7 @@ namespace TOR_ChanceModifier {
         [HarmonyPatch(typeof(AmongUsClient), nameof(AmongUsClient.OnPlayerJoined))]
         static class OnPlayerJoinedPatch {
             public static void Postfix() {
+                ArmReshares();
                 if (PlayerControl.LocalPlayer != null) ShareVersion();
             }
         }
@@ -174,6 +176,46 @@ namespace TOR_ChanceModifier {
         static class GameStartManagerStartPatch {
             public static void Postfix() {
                 versionSent = false;
+                ArmReshares();
+            }
+        }
+
+        // Review 2026-10-02: re-broadcast while somebody is still missing, same as UTS
+        // (UsefulVersionHandshake.ReshareIfSomeoneIsMissing). Players who return from the end
+        // screen before the host lose their entry to the host's OnGameJoined clear and would
+        // otherwise never speak again. Capped and re-armed per arrival; duplicates are harmless.
+        private const int ResharesPerArrival = 5;
+        private const float ReshareIntervalSeconds = 2f;
+        private static int resharesLeft;
+        private static float nextReshareAt;
+
+        private static void ArmReshares() {
+            resharesLeft = ResharesPerArrival;
+            nextReshareAt = 0f;
+        }
+
+        private static void ReshareIfSomeoneIsMissing() {
+            try {
+                if (resharesLeft <= 0) return;
+                if (Time.realtimeSinceStartup < nextReshareAt) return;
+                var client = AmongUsClient.Instance;
+                if (client == null || PlayerControl.LocalPlayer == null) return;
+
+                bool missing = false;
+                foreach (InnerNet.ClientData c in client.allClients.ToArray()) {
+                    if (c == null || c.Character == null) continue;
+                    if (c.Id == client.ClientId) continue;
+                    if (playerVersions.ContainsKey(c.Id)) continue;
+                    missing = true;
+                    break;
+                }
+                if (!missing) { resharesLeft = 0; return; }
+
+                resharesLeft--;
+                nextReshareAt = Time.realtimeSinceStartup + ReshareIntervalSeconds;
+                ShareVersion();
+            } catch {
+                resharesLeft = 0;
             }
         }
 
@@ -189,6 +231,7 @@ namespace TOR_ChanceModifier {
                 }
 
                 if (AmongUsClient.Instance == null) return;
+                ReshareIfSomeoneIsMissing();
                 // F1: immer den Snapshot veröffentlichen, damit ein vorhandener kombinierter
                 // Renderer (UsefulTORStuff) die Chance-Spalte zeichnen kann.
                 PublishSnapshot();
