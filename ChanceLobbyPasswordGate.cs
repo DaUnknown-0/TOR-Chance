@@ -49,6 +49,7 @@ namespace TOR_ChanceModifier
 
         private bool _unlocked;
         private FetchState _fetchState = FetchState.Loading;
+        private float _nextFetchRetry;    // Failed state: the hash is fetched again from here on
         private string _fetchedHash;
 
         private GameObject _panel;
@@ -95,6 +96,18 @@ namespace TOR_ChanceModifier
             {
                 HidePanel();
                 return;
+            }
+
+            // A failed hash fetch is retried every 15 s instead of blocking the lobby until it is
+            // left and made anew (audit 2026-10-04, same as UsefulTORStuff's gate).
+            if (_fetchState == FetchState.Failed)
+            {
+                if (_nextFetchRetry <= 0f) _nextFetchRetry = Time.unscaledTime + 15f;
+                else if (Time.unscaledTime >= _nextFetchRetry)
+                {
+                    _nextFetchRetry = Time.unscaledTime + 15f;
+                    try { this.StartCoroutine(CoFetchHash()); } catch { }
+                }
             }
 
             if (_panel == null || !_panel.activeSelf) return;
@@ -477,7 +490,7 @@ namespace TOR_ChanceModifier
                 case FetchState.Failed:
                     if (_hintLabel != null) { _hintLabel.text = "Error: password_hash.txt not reachable."; _hintLabel.color = new Color(1f, 0.35f, 0.35f); }
                     if (_maskedLabel != null) _maskedLabel.text = "";
-                    if (_statusLabel != null) { _statusLabel.text = "Game start permanently blocked."; _statusLabel.color = new Color(1f, 0.35f, 0.35f); }
+                    if (_statusLabel != null) { _statusLabel.text = "Start blocked until reachable (retry every 15 s)."; _statusLabel.color = new Color(1f, 0.35f, 0.35f); }
                     break;
                 case FetchState.Ready:
                     if (_hintLabel != null) { _hintLabel.text = "Enter password and confirm with Enter:"; _hintLabel.color = new Color(0.82f, 0.82f, 0.82f); }

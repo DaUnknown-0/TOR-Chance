@@ -43,6 +43,17 @@ namespace TOR_ChanceModifier {
         // Mod Manager abgefragt, um die gesammelte Update-Ankündigung erst nach allen Checks zu zeigen.
         private bool _checkCompleted;
 
+        // The folder the running DLL was loaded from (audit 2026-10-04): BepInEx loads plugins from
+        // sub-folders too (mod-manager layouts), and writing the update into plugins\ itself left a
+        // second copy with the same GUID beside the old one. Falls back to plugins\.
+        private static string PluginDir() {
+            try {
+                var dir = Path.GetDirectoryName(typeof(ChanceModUpdater).Assembly.Location);
+                if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) return dir;
+            } catch { }
+            return Paths.PluginPath;
+        }
+
         public void Awake() {
             if (Instance) Destroy(Instance);
             Instance = this;
@@ -51,7 +62,7 @@ namespace TOR_ChanceModifier {
             // aborts the component's initialisation, so the updater silently did not exist for the
             // rest of the session. Cleaning up a leftover file is not worth that.
             try {
-                foreach (var file in Directory.GetFiles(Paths.PluginPath, "TOR-ChanceModifier.dll.old"))
+                foreach (var file in Directory.GetFiles(PluginDir(), "TOR-ChanceModifier.dll.old"))
                     try { File.Delete(file); } catch { }
             } catch (Exception e) {
                 ChancePlugin.Logger?.LogWarning($"[Chance] Could not clean up old plugin files: {e.Message}");
@@ -199,7 +210,7 @@ namespace TOR_ChanceModifier {
                 popup.TextAreaTMP.text = "Updating Chance\nPlease wait...\n\nDownload complete\ncopying file...";
             }
 
-            var filePath = Path.Combine(Paths.PluginPath, asset.Name);
+            var filePath = Path.Combine(PluginDir(), asset.Name);
 
             // Move the working DLL aside before writing the download, so a write failure below can
             // roll back to it instead of leaving the plugin folder without a usable Chance at all.
@@ -472,5 +483,69 @@ namespace TOR_ChanceModifier {
                 return false;
             }
         }
+    }
+
+    // Minimal DTOs matching the GitHub Releases API JSON, the same as HostFix's. TOR's own
+    // GithubRelease uses Version.Parse, which throws on any tag that is no version and broke the
+    // release sort (audit 2026-10-04); these read such a tag as 0.0.0.0. They shadow the TOR type
+    // that the TheOtherRoles.Modules using would bring in.
+    public class GithubRelease {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public int Id { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("tag_name")]
+        public string Tag { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("draft")]
+        public bool Draft { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("prerelease")]
+        public bool Prerelease { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("created_at")]
+        public string CreatedAt { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("published_at")]
+        public string PublishedAt { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("body")]
+        public string Description { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("assets")]
+        public System.Collections.Generic.List<GithubAsset> Assets { get; set; }
+
+        // TryParse, not Parse (AUDIT-2026-08-23, L-22). Tag is whatever text the GitHub API
+        // returned, and a release tagged anything that is not "vX.Y[.Z[.W]]" - a name, a date, a
+        // typo - made this property THROW. The sort comparison reads it for every pair, so one bad
+        // tag anywhere in the feed took down the whole comparison and left the release list in
+        // arbitrary order, from which "the newest release" is then picked. A tag that cannot be
+        // read is treated as version zero instead: it sorts last, IsNewer is false for it, and it
+        // is simply never offered as an update.
+        public Version Version =>
+            Version.TryParse((Tag ?? string.Empty).Replace("v", string.Empty), out var v) ? v : new Version(0, 0, 0, 0);
+
+        public bool IsNewer(Version version) {
+            return Version > version;
+        }
+    }
+
+    public class GithubAsset {
+        [System.Text.Json.Serialization.JsonPropertyName("url")]
+        public string Url { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public int Id { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("size")]
+        public int Size { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("browser_download_url")]
+        public string DownloadUrl { get; set; }
     }
 }

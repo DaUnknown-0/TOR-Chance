@@ -23,7 +23,7 @@ namespace TOR_ChanceModifier {
     [BepInProcess("Among Us.exe")]
     public class ChancePlugin : BasePlugin {
         public const string Id = "com.tormod.chancemodifier";
-        public const string VersionString = "1.2.25.1";
+        public const string VersionString = "1.2.25.2";
         public static System.Version Version = System.Version.Parse(VersionString);
 
         public static BepInEx.Logging.ManualLogSource Logger;
@@ -82,31 +82,31 @@ namespace TOR_ChanceModifier {
                 quantities, ChanceOptions.modifierChance);
 
             ChanceOptions.modifierChanceSpeedMin = CustomOption.Create(
-                1112, Types.Modifier, "Min Speed (V1)",
+                1112, Types.Modifier, "Min Speed",
                 0.5f, 0.25f, 3f, 0.25f, ChanceOptions.modifierChance, false, Chance.OnSpeedMinChanged);
 
             ChanceOptions.modifierChanceSpeedMax = CustomOption.Create(
-                1113, Types.Modifier, "Max Speed (V2)",
+                1113, Types.Modifier, "Max Speed",
                 2.5f, 0.25f, 3f, 0.25f, ChanceOptions.modifierChance, false, Chance.OnSpeedMaxChanged);
 
             ChanceOptions.modifierChanceCooldownMin = CustomOption.Create(
-                1114, Types.Modifier, "Min Kill Cooldown (V3)",
+                1114, Types.Modifier, "Min Kill Cooldown (Impostor roles)",
                 5f, 2.5f, 60f, 2.5f, ChanceOptions.modifierChance, false, Chance.OnCooldownMinChanged);
 
             ChanceOptions.modifierChanceCooldownMax = CustomOption.Create(
-                1115, Types.Modifier, "Max Kill Cooldown (V4)",
+                1115, Types.Modifier, "Max Kill Cooldown (Impostor roles)",
                 60f, 2.5f, 60f, 2.5f, ChanceOptions.modifierChance, false, Chance.OnCooldownMaxChanged);
 
             ChanceOptions.modifierChanceTasksMin = CustomOption.Create(
-                1116, Types.Modifier, "Min Tasks (V5)",
+                1116, Types.Modifier, "Min Tasks",
                 1f, 1f, 10f, 1f, ChanceOptions.modifierChance, false, Chance.OnTasksMinChanged);
 
             ChanceOptions.modifierChanceTasksMax = CustomOption.Create(
-                1117, Types.Modifier, "Max Tasks (V6)",
+                1117, Types.Modifier, "Max Tasks",
                 10f, 1f, 10f, 1f, ChanceOptions.modifierChance, false, Chance.OnTasksMaxChanged);
 
             ChanceOptions.modifierChanceKillDeathChance = CustomOption.Create(
-                1118, Types.Modifier, "Kill Success Chance % (V7)",
+                1118, Types.Modifier, "Kill Success Chance %",
                 30f, 0f, 100f, 5f, ChanceOptions.modifierChance);
 
             ChanceOptions.modifierChanceReportChance = CustomOption.Create(
@@ -126,19 +126,19 @@ namespace TOR_ChanceModifier {
                 0f, 0f, 100f, 5f, ChanceOptions.modifierChance);
 
             ChanceOptions.modifierChanceVoteMultMin = CustomOption.Create(
-                1130, Types.Modifier, "Min Vote Multiplier (V8)",
+                1130, Types.Modifier, "Min Vote Multiplier",
                 1f, 0f, 3f, 1f, ChanceOptions.modifierChance, false, Chance.OnVoteMultMinChanged);
 
             ChanceOptions.modifierChanceVoteMultMax = CustomOption.Create(
-                1131, Types.Modifier, "Max Vote Multiplier (V9)",
+                1131, Types.Modifier, "Max Vote Multiplier",
                 1f, 0f, 3f, 1f, ChanceOptions.modifierChance, false, Chance.OnVoteMultMaxChanged);
 
             ChanceOptions.modifierChanceKillDistanceMin = CustomOption.Create(
-                1132, Types.Modifier, "Min Kill Distance (V10)",
+                1132, Types.Modifier, "Min Kill Distance",
                 1f, 0.5f, 2.5f, 0.25f, ChanceOptions.modifierChance, false, Chance.OnKillDistanceMinChanged);
 
             ChanceOptions.modifierChanceKillDistanceMax = CustomOption.Create(
-                1133, Types.Modifier, "Max Kill Distance (V11)",
+                1133, Types.Modifier, "Max Kill Distance",
                 1.75f, 0.5f, 2.5f, 0.25f, ChanceOptions.modifierChance, false, Chance.OnKillDistanceMaxChanged);
 
             ChanceOptions.modifierChanceSabotageCdMin = CustomOption.Create(

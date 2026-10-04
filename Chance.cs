@@ -252,6 +252,24 @@ namespace TOR_ChanceModifier {
                 && (ChanceOptions.modifierChanceTasksEnabled?.getBool() ?? false);
         }
 
+        /// Host lobby note while Chance spawns but every effect toggle is off (User 2026-10-04: the role
+        /// was handed out with sound and "You are CHAOS!", and nothing happened). Reads the options
+        /// live, the cached flags are only refreshed at the game start. "" = nothing to say.
+        public static string NoEffectNote() {
+            try {
+                if (!HasChanceModifier()) return "";
+                CustomOption[] toggles = {
+                    ChanceOptions.modifierChanceSpeedEnabled, ChanceOptions.modifierChanceCooldownEnabled,
+                    ChanceOptions.modifierChanceKillSuccessEnabled, ChanceOptions.modifierChanceReportEnabled,
+                    ChanceOptions.modifierChanceVisionEnabled, ChanceOptions.modifierChanceVentEnabled,
+                    ChanceOptions.modifierChanceVoteEnabled, ChanceOptions.modifierChanceKillDistanceEnabled,
+                    ChanceOptions.modifierChanceSabotageEnabled, ChanceOptions.modifierChanceTasksEnabled,
+                };
+                foreach (var t in toggles) if (t != null && t.getBool()) return "";
+                return "<color=#FFCC66>Chance is on, but no effect is enabled: the role does nothing.</color>";
+            } catch { return ""; }
+        }
+
         private static bool HasChanceModifier() {
             return ChanceOptions.modifierChance != null && ChanceOptions.modifierChance.getSelection() > 0;
         }
@@ -462,7 +480,21 @@ namespace TOR_ChanceModifier {
                 chanceList.Add(p);
                 chanceIds.Add(id);
             }
+            // A reroll of the local player's values was silent (audit 2026-10-04): sound and a note.
+            if (p != null && p.AmOwner && speedMod.ContainsKey(id)) {
+                ChanceAssets.PlayChaos();
+                ChaosMode.Notice("Chance: your values were rerolled");
+            }
             speedMod[id]          = roll.speed;
+            // A reroll after a meeting lands AFTER TOR/vanilla restarted the kill timer with the old
+            // value (audit 2026-10-04: the first cooldown after a meeting still ran on the old roll while
+            // the task text showed the new one). Rescale the running timer of the local impostor.
+            if (cooldownEnabled && cooldownMod.TryGetValue(id, out float oldCd) && oldCd > 0.01f
+                && Mathf.Abs(oldCd - roll.cooldown) > 0.01f && p != null && p.AmOwner
+                && p.Data?.Role?.IsImpostor == true && p.killTimer > 0f) {
+                p.killTimer = Mathf.Clamp(p.killTimer * roll.cooldown / oldCd, 0f, roll.cooldown);
+                try { if (HudManager.Instance != null) HudManager.Instance.KillButton.SetCoolDown(p.killTimer, roll.cooldown); } catch { }
+            }
             cooldownMod[id]       = roll.cooldown;
             visionMod[id]         = roll.vision;
             tasksMod[id]          = roll.tasks;
@@ -565,10 +597,15 @@ namespace TOR_ChanceModifier {
             // a randomized stat that isn't applied (every disabled effect is plain vanilla).
             var parts = new List<string>();
             if (speedEnabled && speedMod.TryGetValue(playerId, out float speed)) parts.Add($"Speed {speed:0.00}×");
-            if (cooldownEnabled && cooldownMod.TryGetValue(playerId, out float cd)) parts.Add($"Kill CD {cd:0.0}s");
+            // The rolled kill cooldown works through SetKillTimer, which only the impostor team's kill
+            // button uses (Sheriff, Jackal and co. have their own button timers), and the task count
+            // only for players with real tasks (audit 2026-10-04).
+            bool impostor = PlayerControl.LocalPlayer.Data?.Role?.IsImpostor == true;
+            if (cooldownEnabled && impostor && cooldownMod.TryGetValue(playerId, out float cd)) parts.Add($"Kill CD {cd:0.0}s");
             if (visionEnabled && visionMod.TryGetValue(playerId, out float vis)) parts.Add($"Vision {vis:0.00}×");
             // tasksMod is NoTaskChange whenever the task feature is disabled (toggle off or delayed).
-            if (tasksMod.TryGetValue(playerId, out byte tasks) && tasks != NoTaskChange) parts.Add($"Tasks {tasks}");
+            if (tasksMod.TryGetValue(playerId, out byte tasks) && tasks != NoTaskChange
+                && !Helpers.hasFakeTasks(PlayerControl.LocalPlayer)) parts.Add($"Tasks {tasks}");
             if (voteEnabled && voteMultiplierMod.TryGetValue(playerId, out byte votes)) parts.Add($"Votes ×{votes}");
             // ASCII: the HUD font has no check mark glyph, it rendered as a missing-glyph box.
             if (ventEnabled && ventAccessMod.TryGetValue(playerId, out bool vent) && vent) parts.Add("Vent: yes");
@@ -781,15 +818,60 @@ namespace TOR_ChanceModifier {
 
     [HarmonyPatch(typeof(Helpers), nameof(Helpers.checkMuderAttempt))]
     static class ChanceMurderAttemptPatch {
+        // A Vampire's bite that passed the roll: the delayed kill of the same victim does not roll a
+        // second time (audit 2026-10-04: bite and kill both rolled, 30 % became 9 %). Key killer*256+target,
+        // value Time.time of the bite; TOR's kill delay is at most 20 s.
+        private static readonly Dictionary<int, float> passedBites = new();
+        /// Frame of a failed roll by the local player, for the kill button's cooldown (KillButtonFailPatch).
+        internal static int localFailFrame = -1;
+
         public static void Postfix(PlayerControl killer, PlayerControl target, ref MurderAttemptResult __result) {
             if (!Chance.killSuccessEnabled) return;
             if (__result != MurderAttemptResult.PerformKill) return;
             if (killer == null) return;
             if (!Chance.IsChancePlayer(killer.PlayerId)) return;
+            // TOR asks checkMuderAttempt for things that are no kill (audit 2026-10-04):
+            // the Bomber only checks whether he is blanked himself (killer == target); a failed roll
+            // there cost him the bomb for the whole round.
+            if (target == null || target == killer) return;
+            // The Witch rolled when casting; the meeting-end execution of the same spell is no second roll.
+            if (Witch.witch != null && killer == Witch.witch && (ExileController.Instance != null || MeetingHud.Instance != null)) return;
+            int key = killer.PlayerId * 256 + target.PlayerId;
+            if (passedBites.TryGetValue(key, out float at)) {
+                passedBites.Remove(key);
+                if (Time.time - at < 30f) return;
+            }
 
             if (rnd.NextDouble() * 100f >= Chance.killDeathChance) {
                 __result = MurderAttemptResult.BlankKill;
+                if (killer.AmOwner) {
+                    // The failed kill was silent (audit 2026-10-04): a short grey flash with a word.
+                    localFailFrame = Time.frameCount;
+                    try { Helpers.showFlash(new Color(0.55f, 0.55f, 0.6f), 0.5f, "Chance: kill failed"); } catch { }
+                }
+            } else if (Vampire.vampire != null && killer == Vampire.vampire) {
+                passedBites[key] = Time.time;
             }
+        }
+    }
+
+    // A failed Chance roll on the kill button: TOR's DoClick then sets the LOBBY cooldown directly, so a
+    // failure in a 45 s roll cost only 25 s, a success the full 45 (audit 2026-10-04). Same frame only, and
+    // only when TOR's generic branch ran (the timer equals the lobby value; Cleaner, Warlock, Mini and Witch
+    // keep their own).
+    [HarmonyPatch(typeof(KillButton), nameof(KillButton.DoClick))]
+    static class ChanceKillButtonFailPatch {
+        public static void Postfix() {
+            try {
+                if (ChanceMurderAttemptPatch.localFailFrame != Time.frameCount) return;
+                ChanceMurderAttemptPatch.localFailFrame = -1;
+                var lp = PlayerControl.LocalPlayer;
+                if (lp == null || !Chance.cooldownEnabled || !Chance.cooldownMod.TryGetValue(lp.PlayerId, out float cd)) return;
+                float lobby = GameOptionsManager.Instance?.currentNormalGameOptions?.KillCooldown ?? -1f;
+                if (Mathf.Abs(lp.killTimer - lobby) > 0.01f) return;
+                lp.killTimer = cd;
+                if (HudManager.Instance != null) HudManager.Instance.KillButton.SetCoolDown(cd, cd);
+            } catch { }
         }
     }
 
@@ -927,10 +1009,16 @@ namespace TOR_ChanceModifier {
             // aber nur dem LOKALEN Spieler. SetKillTimer wird von TOR auch für fremde Spieler
             // aufgerufen — ohne AmOwner-Gate zeigte der eigene Button fremde Cooldowns an und
             // NRE'te vor HUD-Existenz (P1.3).
-            bool restart = time > __state + 0.001f;
+            float lobby = GameOptionsManager.Instance?.currentNormalGameOptions?.KillCooldown ?? 0f;
+            // A restart is a higher value than before, OR the full lobby cooldown while more than that
+            // was still left (audit 2026-10-04: a 45 s roll with 40 s left, then a meeting set 25, which
+            // looked like a tick and cut the cooldown to 25; a quick meeting after a kill became a trick).
+            // A tick lowers the timer by one frame, so "much lower than before" is never a tick.
+            float lobbyFull = lobby * (Mini.mini != null && __instance == Mini.mini ? (Mini.isGrownUp() ? 0.66f : 2f) : 1f);
+            bool restart = time > __state + 0.001f
+                || (__state - time > 0.5f && Mathf.Abs(time - lobbyFull) < 0.01f);
             if (restart) {
                 // proportional, so the shorter first-round timer keeps its share of the rolled cooldown
-                float lobby = GameOptionsManager.Instance?.currentNormalGameOptions?.KillCooldown ?? 0f;
                 __instance.killTimer = lobby > 0.01f ? Mathf.Clamp(time * cd / lobby, 0f, cd) : cd;
             } else {
                 __instance.killTimer = Mathf.Clamp(time, 0f, cd);
@@ -1033,10 +1121,16 @@ namespace TOR_ChanceModifier {
     [HarmonyPatch(typeof(TheOtherRoles.Patches.PlayerControlFixedUpdatePatch),
                   nameof(TheOtherRoles.Patches.PlayerControlFixedUpdatePatch.setTarget))]
     static class ChanceKillDistancePatch {
+        /// Depth of the kill-targeting methods currently running (ChanceKillScopePatch).
+        internal static int killScope;
+
         public static bool Prefix(ref PlayerControl __result,
                                   bool onlyCrewmates, bool targetPlayersInVents,
                                   List<PlayerControl> untargetablePlayers, PlayerControl targetingPlayer) {
             if (!Chance.killDistanceEnabled) return true;
+            // Only the reach of a KILL (User 2026-10-04): setTarget also picks the target of the Medic
+            // shield, Shifter, Tracker, Morphling, Eraser, Arsonist and more, and those keep TOR's reach.
+            if (killScope <= 0) return true;
             PlayerControl tp = targetingPlayer ?? PlayerControl.LocalPlayer;
             if (tp == null || tp.Data == null) return true;
             if (!Chance.isChance(tp.PlayerId)) return true;
@@ -1077,6 +1171,29 @@ namespace TOR_ChanceModifier {
             }
             __result = result;
             return false;
+        }
+    }
+
+    /// TOR's per-role target methods whose target is a kill: while one runs, setTarget uses the
+    /// Chance kill distance. Missing methods (another TOR version) are simply skipped.
+    [HarmonyPatch]
+    static class ChanceKillScopePatch {
+        static readonly string[] KillTargeting = {
+            "impostorSetTarget", "sheriffSetTarget", "jackalSetTarget", "sidekickSetTarget", "vampireSetTarget",
+            "warlockSetTarget", "witchSetTarget", "ninjaSetTarget", "thiefSetTarget",
+        };
+
+        static IEnumerable<MethodBase> TargetMethods() {
+            foreach (var n in KillTargeting) {
+                var m = AccessTools.Method(typeof(TheOtherRoles.Patches.PlayerControlFixedUpdatePatch), n);
+                if (m != null) yield return m;
+            }
+        }
+
+        static void Prefix() => ChanceKillDistancePatch.killScope++;
+        static Exception Finalizer(Exception __exception) {
+            if (ChanceKillDistancePatch.killScope > 0) ChanceKillDistancePatch.killScope--;
+            return __exception;
         }
     }
 
@@ -1130,14 +1247,14 @@ namespace TOR_ChanceModifier {
 
                 float? targetCd = null;
 
+                // The whole impostor team sees the value the host enforces (User 2026-10-04): the
+                // maximum over the living Chance impostors. Every client already holds every player's
+                // rolled values (RPC 200), so each one computes the same maximum the host does; before,
+                // a non-Chance teammate saw the vanilla timer and the host silently refused his click.
                 var lp = PlayerControl.LocalPlayer;
-                if (lp != null && lp.Data != null && !lp.Data.IsDead && lp.Data.Role != null
-                    && lp.Data.Role.IsImpostor && Chance.isChance(lp.PlayerId)
-                    && Chance.sabotageCdMod.TryGetValue(lp.PlayerId, out float localCd)) {
-                    targetCd = localCd;
-                }
-
-                if (AmongUsClient.Instance != null && AmongUsClient.Instance.AmHost) {
+                bool localImpostor = lp != null && lp.Data != null && lp.Data.Role != null && lp.Data.Role.IsImpostor;
+                bool host = AmongUsClient.Instance != null && AmongUsClient.Instance.AmHost;
+                if (localImpostor || host) {
                     float? maxCd = null;
                     foreach (var kv in Chance.sabotageCdMod) {
                         if (!Chance.isChance(kv.Key)) continue;
@@ -1146,7 +1263,7 @@ namespace TOR_ChanceModifier {
                             || p.Data.Role == null || !p.Data.Role.IsImpostor) continue;
                         if (maxCd == null || kv.Value > maxCd.Value) maxCd = kv.Value;
                     }
-                    if (maxCd.HasValue) targetCd = maxCd; // host authority uses the maximum
+                    if (maxCd.HasValue) targetCd = maxCd; // host authority and the team's UI use the maximum
                 }
 
                 float now = sab.Timer;

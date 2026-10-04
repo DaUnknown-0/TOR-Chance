@@ -145,9 +145,20 @@ namespace TOR_ChanceModifier {
             } catch { }
         }
 
-        // True when UsefulTORStuff is loaded (it owns the combined overview when present).
-        private static bool CombinedRendererPresent() =>
-            AppDomain.CurrentDomain.GetData("ModManager.RegisteredMod." + UsefulGuid) != null;
+        // True when UsefulTORStuff is loaded AND running (it owns the combined overview then). A UTS
+        // switched off in the Mod Manager still registers itself, with RuntimeEnabled = false, and
+        // draws nothing: Chance must keep its own list then (audit 04.10.). An entry without the key
+        // (an older UTS) counts as running.
+        private static bool CombinedRendererPresent() {
+            var data = AppDomain.CurrentDomain.GetData("ModManager.RegisteredMod." + UsefulGuid);
+            if (data == null) return false;
+            try {
+                if (data is System.Collections.Generic.Dictionary<string, object> dict
+                    && dict.TryGetValue("RuntimeEnabled", out var re) && re is bool running)
+                    return running;
+            } catch { }
+            return true;
+        }
 
         // P1.5: Beim Betreten einer Lobby den Versions-Cache leeren. ClientIds sind
         // verbindungsskopiert, sodass alte Einträge sonst nur leaken — das Dictionary soll aber
@@ -241,9 +252,10 @@ namespace TOR_ChanceModifier {
 
                 // F1: Ist UsefulTORStuff geladen, besitzt es die kombinierte Mod-Check-Übersicht —
                 // dann KEIN eigenes Standalone-Block, sonst sähe der Host zwei getrennte Listen.
-                if (CombinedRendererPresent()) return;
-
-                string chanceMsg = BuildMismatchMessage();
+                // The no-effect note is Chance's own, so it shows next to the combined renderer too.
+                string chanceMsg = CombinedRendererPresent() ? "" : BuildMismatchMessage();
+                string note = Chance.NoEffectNote();
+                if (note != "") chanceMsg = chanceMsg == "" ? note : chanceMsg + "\n" + note;
                 if (chanceMsg == "") return;
 
                 var text = __instance.GameStartText;

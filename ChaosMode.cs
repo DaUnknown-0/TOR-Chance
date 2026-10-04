@@ -220,8 +220,13 @@ namespace TOR_ChanceModifier {
             ChancePlugin.Logger?.LogInfo($"[Chaos] Reroll: {impPlayers.Count} impostors, {crewPlayers.Count} crew " +
                 $"(alive={alive.Count}, spy={(Spy.spy != null ? Spy.spy.PlayerId.ToString() : "-")}, snitch={(Snitch.snitch != null ? Snitch.snitch.PlayerId.ToString() : "-")})");
 
-            RerollTeam(impPlayers, ImpostorRoles());
-            RerollTeam(crewPlayers, CrewRoles());
+            // Never more special roles per side than the lobby's TOR maximum; the rest stay vanilla
+            // (User 2026-10-04: after the first meeting nearly every player had a special role).
+            int impCap = CustomOptionHolder.impostorRolesCountMax.getSelection();
+            int crewCap = CustomOptionHolder.crewmateRolesFill.getBool() ? int.MaxValue
+                : CustomOptionHolder.crewmateRolesCountMax.getSelection();
+            RerollTeam(impPlayers, ImpostorRoles(), impCap);
+            RerollTeam(crewPlayers, CrewRoles(), crewCap);
 
             // Restore the erased record in case a reassigned eraser cleared it (see snapshot above),
             // so erased players stay excluded from every future reroll.
@@ -233,7 +238,31 @@ namespace TOR_ChanceModifier {
             RerollModifiers();
         }
 
-        private static void RerollTeam(List<PlayerControl> players, List<ChaosRole> rolePool) {
+        // TOR's blocked role pairs (CustomOptionHolder.blockedRolePairings is internal): never both in
+        // one round. Spy/Mini is a modifier pair and handled in the modifier reroll (ModSpec Mini).
+        private static readonly (RoleId A, RoleId B)[] BlockedPairs = {
+            (RoleId.Vampire, RoleId.Warlock), (RoleId.Cleaner, RoleId.Vulture),
+        };
+
+        private static PlayerControl HolderOf(RoleId id) => id switch {
+            RoleId.Vampire => Vampire.vampire, RoleId.Warlock => Warlock.warlock,
+            RoleId.Cleaner => Cleaner.cleaner, RoleId.Vulture => Vulture.vulture, _ => null,
+        };
+
+        /// Would `id` sit next to its blocked partner: already drawn in this reroll, or held by a living
+        /// player who keeps it (not part of this reroll)? (audit 2026-10-04)
+        private static bool BlockedByPair(RoleId id, HashSet<RoleId> drawn, List<PlayerControl> players) {
+            foreach (var (a, b) in BlockedPairs) {
+                RoleId partner = id == a ? b : id == b ? a : (RoleId)255;
+                if ((byte)partner == 255) continue;
+                if (drawn.Contains(partner)) return true;
+                var h = HolderOf(partner);
+                if (h != null && h.Data != null && !h.Data.IsDead && !players.Any(p => p.PlayerId == h.PlayerId)) return true;
+            }
+            return false;
+        }
+
+        private static void RerollTeam(List<PlayerControl> players, List<ChaosRole> rolePool, int cap) {
             if (players.Count == 0) return;
 
             var shuffledPlayers = players.OrderBy(_ => rnd.Next()).ToList();
@@ -284,18 +313,25 @@ namespace TOR_ChanceModifier {
 
                 var assignedRoles = new HashSet<RoleId>();
 
+                // Roles held by living non-participants count against the side's maximum.
+                int kept = rolePool.Count(r => { var h = r.Holder(); return h != null && h.Data != null && !h.Data.IsDead
+                                                         && !players.Any(p => p.PlayerId == h.PlayerId); });
+                int room = cap == int.MaxValue ? int.MaxValue : Math.Max(0, cap - kept);
+
                 // Guaranteed (100%) roles first.
                 foreach (var roleId in ensured) {
-                    if (idx >= shuffledPlayers.Count) break;
+                    if (idx >= shuffledPlayers.Count || idx >= room) break;
+                    if (BlockedByPair(roleId, assignedRoles, players)) continue;
                     if (!assignedRoles.Add(roleId)) continue;
                     result.Add(new KeyValuePair<byte, byte>(shuffledPlayers[idx].PlayerId, (byte)roleId));
                     idx++;
                 }
 
                 // Weighted ticket pool for 1-9 chance roles, kept unique while distinct roles last.
-                while (idx < shuffledPlayers.Count && tickets.Count > 0) {
+                while (idx < shuffledPlayers.Count && idx < room && tickets.Count > 0) {
                     RoleId roleId = tickets[rnd.Next(tickets.Count)];
                     tickets.RemoveAll(x => x == roleId); // enforce uniqueness
+                    if (BlockedByPair(roleId, assignedRoles, players)) continue;
                     if (!assignedRoles.Add(roleId)) continue;
                     result.Add(new KeyValuePair<byte, byte>(shuffledPlayers[idx].PlayerId, (byte)roleId));
                     idx++;
@@ -384,9 +420,17 @@ namespace TOR_ChanceModifier {
             try {
                 RPCProcedure.erasePlayerRoles(playerId); // keeps vanilla team + modifiers (ignoreModifier=true)
                 if (roleId != NoneRoleId) RPCProcedure.setRole(roleId, playerId);
-                // Scrambled-arpeggio cue only for the player whose role just changed.
-                if (PlayerControl.LocalPlayer != null && PlayerControl.LocalPlayer.PlayerId == playerId)
+                // Scrambled-arpeggio cue only for the player whose role just changed, and since
+                // 2026-10-04 also the new role's name (the sound alone said nothing).
+                if (PlayerControl.LocalPlayer != null && PlayerControl.LocalPlayer.PlayerId == playerId) {
                     ChanceAssets.PlayChaos();
+                    string role = "none";
+                    try {
+                        var info = RoleInfo.getRoleInfoForPlayer(PlayerControl.LocalPlayer, false).FirstOrDefault();
+                        if (info != null) role = info.name;
+                    } catch { }
+                    Notice($"Chaos: your role is now {role}");
+                }
             } catch (Exception e) {
                 ChancePlugin.Logger?.LogError($"[Chaos] ApplyChaosReassign failed for player {playerId}, role {roleId}: {e}");
             }
@@ -474,7 +518,8 @@ namespace TOR_ChanceModifier {
 
         private static List<ModSpec> ModifierSpecs() => new List<ModSpec> {
             new ModSpec(RoleId.Tiebreaker,   () => CustomOptionHolder.modifierTieBreaker.getSelection(),   () => 1, () => single(Tiebreaker.tiebreaker)),
-            new ModSpec(RoleId.Mini,         () => CustomOptionHolder.modifierMini.getSelection(),         () => 1, () => single(Mini.mini)),
+            // Mini never on the Spy (TOR's blocked pair Spy/Mini, audit 2026-10-04)
+            new ModSpec(RoleId.Mini,         () => CustomOptionHolder.modifierMini.getSelection(),         () => 1, () => single(Mini.mini), excludeSpy: true),
             new ModSpec(RoleId.Armored,      () => CustomOptionHolder.modifierArmored.getSelection(),      () => 1, () => single(Armored.armored)),
             new ModSpec(RoleId.Shifter,      () => CustomOptionHolder.modifierShifter.getSelection(),      () => 1, () => single(Shifter.shifter), crewOnly: true, excludeSpy: true),
             new ModSpec(RoleId.Bait,         () => CustomOptionHolder.modifierBait.getSelection(),         () => CustomOptionHolder.modifierBaitQuantity.getQuantity(),         () => many(Bait.bait)),
@@ -499,9 +544,39 @@ namespace TOR_ChanceModifier {
             return true;
         }
 
+        // GuesserGM is internal in TOR: isGuesser(byte) via reflection, null = not found.
+        private static MethodInfo guesserIsGuesser;
+        private static bool guesserResolved;
+        private static bool IsGmGuesser(byte id) {
+            if (!guesserResolved) {
+                guesserResolved = true;
+                try { guesserIsGuesser = AccessTools.Method(AccessTools.TypeByName("TheOtherRoles.CustomGameModes.GuesserGM"), "isGuesser"); } catch { }
+            }
+            try { return guesserIsGuesser != null && (bool)guesserIsGuesser.Invoke(null, new object[] { id }); } catch { return false; }
+        }
+
+        /// Every connected client confirmed this Chance version (RPC 251). Without the mod a client
+        /// never hears the modifier clear (custom RPC 202) and keeps the old modifiers next to the new
+        /// ones (User 2026-10-04: modifier reroll only when everybody has Chance).
+        private static bool AllClientsHaveChance() {
+            try {
+                foreach (var pc in PlayerControl.AllPlayerControls) {
+                    if (pc == null || pc.Data == null || pc.Data.Disconnected) continue;
+                    if (pc.AmOwner) continue;
+                    if (!ChanceVersionHandshake.playerVersions.TryGetValue(pc.OwnerId, out var pv)
+                        || ChancePlugin.Version.CompareTo(pv.version) != 0) return false;
+                }
+                return true;
+            } catch { return false; }
+        }
+
         public static void RerollModifiers() {
             if (!(AmongUsClient.Instance?.AmHost ?? false)) return;
             if (!IsEnabled() || !ModifierRerollEnabled()) return;
+            if (!AllClientsHaveChance()) {
+                ChancePlugin.Logger?.LogInfo("[Chaos] Modifier reroll skipped: not every client has this Chance version.");
+                return;
+            }
 
             var participants = PlayerControl.AllPlayerControls.ToArray()
                 .Where(p => p != null && p.Data != null && !p.Data.Disconnected && !p.Data.IsDead && p.Data.Role != null)
@@ -509,6 +584,12 @@ namespace TOR_ChanceModifier {
                 // slots; handing a UC-role holder a TOR modifier on top would be a double role, same
                 // reasoning as isProtectedFromReroll above.
                 .Where(p => !HasUcRole(p))
+                // TOR's own rules (audit 2026-10-04): Lovers keep only their Lover modifier, and in the
+                // Guesser game mode Guessers get none unless the lobby allows it.
+                .Where(p => !(Lovers.lover1 != null && p.PlayerId == Lovers.lover1.PlayerId)
+                         && !(Lovers.lover2 != null && p.PlayerId == Lovers.lover2.PlayerId))
+                .Where(p => !(TheOtherRoles.Utilities.HandleGuesser.isGuesserGm && !CustomOptionHolder.guesserGamemodeHaveModifier.getBool()
+                              && IsGmGuesser(p.PlayerId)))
                 .ToList();
             if (OnlyChanceModifierScope())
                 participants = participants.Where(p => Chance.IsChancePlayer(p.PlayerId)).ToList();
@@ -536,7 +617,10 @@ namespace TOR_ChanceModifier {
             int countMin = CustomOptionHolder.modifiersCountMin.getSelection();
             int countMax = CustomOptionHolder.modifiersCountMax.getSelection();
             if (countMin > countMax) countMin = countMax;
-            int targetCount = Math.Min(rnd.Next(countMin, countMax + 1), participants.Count);
+            int targetCount = rnd.Next(countMin, countMax + 1);
+            // A living Lover pair takes one of the modifier slots, as in TOR's assignModifiers.
+            if (Lovers.lover1 != null && Lovers.lover2 != null) targetCount--;
+            targetCount = Math.Max(0, Math.Min(targetCount, participants.Count));
 
             var shuffled = participants.OrderBy(_ => rnd.Next()).ToList();
             var assignedTo = new HashSet<byte>();
@@ -605,8 +689,38 @@ namespace TOR_ChanceModifier {
             try { RPCProcedure.setModifier(modifierId, playerId, flag); } catch { }
         }
 
+        /// Short message in the corner notifier (where join/leave messages appear).
+        internal static void Notice(string text) {
+            try {
+                var hud = HudManager.Instance;
+                if (hud != null && hud.Notifier != null) hud.Notifier.AddDisconnectMessage(text);
+            } catch { }
+        }
+
+        private static string LocalModifiers() {
+            try {
+                var lp = PlayerControl.LocalPlayer;
+                if (lp == null) return "";
+                return string.Join(", ", RoleInfo.getRoleInfoForPlayer(lp, true).Where(r => r.isModifier).Select(r => r.name));
+            } catch { return ""; }
+        }
+
         // Runs on host + every Chance-mod client: strip the player from all primary modifier holders.
         public static void ApplyChaosModifierClear(byte playerId) {
+            // The local player's modifier reroll was silent (audit 2026-10-04). Remember what he had,
+            // and once the new modifiers have arrived (the sets follow the clear at once), say so.
+            if (PlayerControl.LocalPlayer != null && PlayerControl.LocalPlayer.PlayerId == playerId && HudManager.Instance != null) {
+                string before = LocalModifiers();
+                try {
+                    HudManager.Instance.StartCoroutine(Effects.Lerp(1.5f, new Action<float>(p => {
+                        if (p < 1f) return;
+                        string after = LocalModifiers();
+                        if (after == before) return;
+                        ChanceAssets.PlayChaos();
+                        Notice(after == "" ? "Chaos: you no longer have a modifier" : $"Chaos: your modifier is now {after}");
+                    })));
+                } catch { }
+            }
             try {
                 Bait.bait?.RemoveAll(x => x != null && x.PlayerId == playerId);
                 Bloody.bloody?.RemoveAll(x => x != null && x.PlayerId == playerId);
