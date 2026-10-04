@@ -404,14 +404,28 @@ namespace TOR_ChanceModifier {
             historyInitialized = true;
             foreach (var p in PlayerControl.AllPlayerControls) {
                 if (p == null || p.Data == null || p.Data.Role == null) continue;
-                roleHistory[p.PlayerId] = new List<string> { RoleInfo.GetRolesString(p, true, false) };
+                roleHistory[p.PlayerId] = new List<string> { RoleOnly(p, true) };
             }
+        }
+
+        /// The ROLE part of TOR's GetRolesString, exactly as it builds it with showModifier false: no
+        /// modifiers, no §/Guesser tag, no ghost info. The end screen replaces this part with the
+        /// history and keeps everything around it (ChaosRoleHistoryPatch).
+        internal static string RoleOnly(PlayerControl p, bool useColors) =>
+            string.Join(" ", RoleInfo.getRoleInfoForPlayer(p, false)
+                .Select(x => useColors ? Helpers.cs(x.color, x.name) : x.name).ToArray());
+
+        /// Game end: the final role joins the history (a Sidekick promotion, Shifter or Thief swap
+        /// after the last reroll was missing). Called before TOR builds the end summary.
+        internal static void RecordFinalRoles() {
+            if (!historyInitialized) return;
+            foreach (var id in roleHistory.Keys.ToList()) RecordCurrentRole(id);
         }
 
         private static void RecordCurrentRole(byte playerId) {
             var p = Helpers.playerById(playerId);
             if (p == null) return;
-            string name = RoleInfo.GetRolesString(p, true, false);
+            string name = RoleOnly(p, true);
             if (!roleHistory.TryGetValue(playerId, out var list)) {
                 list = new List<string>();
                 roleHistory[playerId] = list;
@@ -697,14 +711,39 @@ namespace TOR_ChanceModifier {
     // Bug 4: at game end, show the full role progression (e.g. "Sheriff → Medic → Mayor")
     // instead of only the final role. Only active once the game has ended, so in-game
     // displays (nameplates, meetings) still show the current role.
+    // Only the ROLE part is replaced (audit 2026-10-03): the whole string used to be swapped for the
+    // chain, which dropped the modifiers (Lover, Chance, Bait ...), the Guesser/Lawyer tags and the
+    // death reason of every player with a history.
     [HarmonyPatch(typeof(RoleInfo), nameof(RoleInfo.GetRolesString))]
     static class ChaosRoleHistoryPatch {
-        public static void Postfix(PlayerControl p, ref string __result) {
-            if (p == null || AmongUsClient.Instance == null) return;
+        public static void Postfix(PlayerControl p, bool useColors, ref string __result) {
+            if (p == null || AmongUsClient.Instance == null || __result == null) return;
             if (AmongUsClient.Instance.GameState != InnerNet.InnerNetClient.GameStates.Ended) return;
             var hist = ChaosMode.GetHistory(p.PlayerId);
             if (hist == null || hist.Count <= 1) return;
-            __result = string.Join(" → ", hist.ToArray());
+            try {
+                string chain = string.Join(" → ", hist.ToArray());
+                string rolePart = ChaosMode.RoleOnly(p, useColors);
+                if (!useColors)
+                    chain = System.Text.RegularExpressions.Regex.Replace(chain, "<.*?>", "");
+                int at = string.IsNullOrEmpty(rolePart) ? -1 : __result.LastIndexOf(rolePart, StringComparison.Ordinal);
+                __result = at >= 0
+                    ? __result.Substring(0, at) + chain + __result.Substring(at + rolePart.Length)
+                    : chain;   // the role part could not be found: the history alone, as before
+            } catch (Exception e) {
+                ChancePlugin.Logger?.LogWarning($"[Chaos] role history in summary failed: {e.Message}");
+            }
+        }
+    }
+
+    // The final roles go into the history before TOR's end summary is built (its OnGameEnd postfix
+    // reads GetRolesString and then resets the roles).
+    [HarmonyPatch(typeof(AmongUsClient), nameof(AmongUsClient.OnGameEnd))]
+    static class ChaosFinalRolePatch {
+        [HarmonyPriority(Priority.First)]
+        public static void Prefix() {
+            try { ChaosMode.RecordFinalRoles(); }
+            catch (Exception e) { ChancePlugin.Logger?.LogWarning($"[Chaos] final role record failed: {e.Message}"); }
         }
     }
 

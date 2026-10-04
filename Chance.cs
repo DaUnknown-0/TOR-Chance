@@ -570,7 +570,8 @@ namespace TOR_ChanceModifier {
             // tasksMod is NoTaskChange whenever the task feature is disabled (toggle off or delayed).
             if (tasksMod.TryGetValue(playerId, out byte tasks) && tasks != NoTaskChange) parts.Add($"Tasks {tasks}");
             if (voteEnabled && voteMultiplierMod.TryGetValue(playerId, out byte votes)) parts.Add($"Votes ×{votes}");
-            if (ventEnabled && ventAccessMod.TryGetValue(playerId, out bool vent) && vent) parts.Add("Vent ✓");
+            // ASCII: the HUD font has no check mark glyph, it rendered as a missing-glyph box.
+            if (ventEnabled && ventAccessMod.TryGetValue(playerId, out bool vent) && vent) parts.Add("Vent: yes");
             if (killDistanceEnabled && killDistanceMod.TryGetValue(playerId, out float kd)) parts.Add($"KillDist {kd:0.0}");
             // Sabotage cooldown only affects impostors, so only surface it for them.
             if (sabotageEnabled && PlayerControl.LocalPlayer.Data?.Role?.IsImpostor == true
@@ -904,6 +905,11 @@ namespace TOR_ChanceModifier {
         // only ever shorten it: a 45 s roll in a 25 s lobby did nothing but draw a wrong max (Opus audit
         // 2026-10-02). The timer before the call tells a restart (after a kill or meeting: the new value
         // is higher) from the per-tick countdown (lower), and the requested value is used, not TOR's clamp.
+        // Priority.First ON THE METHOD (a class attribute is ignored): the timer has to be read BEFORE
+        // TOR's prefix on the same method clamps it to the lobby cooldown. Running after it, __state
+        // already held min(time, lobby), a restart was never recognised and every roll above the
+        // lobby value was capped back to it (audit 2026-10-03).
+        [HarmonyPriority(Priority.First)]
         public static void Prefix(PlayerControl __instance, out float __state) => __state = __instance != null ? __instance.killTimer : 0f;
 
         public static void Postfix(PlayerControl __instance, [HarmonyArgument(0)] float time, float __state) {
