@@ -235,6 +235,7 @@ namespace TOR_ChanceModifier
             www.SetUrl(HashFileUrl);
             www.SetRequestHeader("User-Agent", $"TOR-ChanceModifier/{ChancePlugin.VersionString}");
             www.downloadHandler = new DownloadHandlerBuffer();
+            www.timeout = 15; // a hanging request would otherwise keep the state on Loading forever
             var op = www.SendWebRequest();
 
             while (!op.isDone)
@@ -282,6 +283,7 @@ namespace TOR_ChanceModifier
             www.SetUrl(HashFileUrl);
             www.SetRequestHeader("User-Agent", $"TOR-ChanceModifier/{ChancePlugin.VersionString}");
             www.downloadHandler = new DownloadHandlerBuffer();
+            www.timeout = 15; // a hanging request would otherwise keep the state on Loading forever
             var op = www.SendWebRequest();
 
             while (!op.isDone)

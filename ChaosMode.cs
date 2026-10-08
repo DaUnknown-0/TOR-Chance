@@ -138,6 +138,9 @@ namespace TOR_ChanceModifier {
             if (Guesser.isGuesser(p.PlayerId)) return true;
             if (p == Sheriff.sheriff && Deputy.deputy != null && Deputy.deputy.Data != null
                 && !Deputy.deputy.Data.IsDead) return true;
+            // TOR's erasePlayerRoles clears Shifter.shifter even with ignoreModifier (RPC.cs), so a
+            // rerolled Shifter would lose the role without getting it back (audit 08.10.).
+            if (p == Shifter.shifter) return true;
             if (HasUcRole(p)) return true;
             return false;
         }
