@@ -53,12 +53,16 @@ namespace TOR_ChanceModifier {
             Receive(v.Major, v.Minor, v.Build, clampedRevision, Assembly.GetExecutingAssembly().ManifestModule.ModuleVersionId, AmongUsClient.Instance.ClientId);
         }
 
-        // Reads the RPC 251 payload (called from ChanceHandleRpcPatch).
-        public static void ReceiveRpc(MessageReader reader) {
+        // Reads the RPC 251 payload (called from ChanceHandleRpcPatch). The entry is keyed by the
+        // sender's ClientId from the transport (senderClientId), not by the ClientId in the payload:
+        // otherwise any client could overwrite another player's version. The payload field is still
+        // read so the wire format stays unchanged.
+        public static void ReceiveRpc(MessageReader reader, int senderClientId) {
             byte major = reader.ReadByte();
             byte minor = reader.ReadByte();
             byte build = reader.ReadByte();
-            int clientId = reader.ReadPackedInt32();
+            reader.ReadPackedInt32();
+            int clientId = senderClientId;
             byte revision = 0xFF;
             Guid guid;
             if (reader.Length - reader.Position >= 17) {
@@ -87,7 +91,7 @@ namespace TOR_ChanceModifier {
         private static string BuildMismatchMessage() {
             string message = "";
             foreach (InnerNet.ClientData client in AmongUsClient.Instance.allClients.ToArray()) {
-                if (client == null || client.Character == null) continue;
+                if (client == null || client.Character == null || client.Character.Data == null) continue;
                 string name = client.Character.Data.PlayerName;
 
                 if (!playerVersions.TryGetValue(client.Id, out PlayerVersion pv)) {

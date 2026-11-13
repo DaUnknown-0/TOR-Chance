@@ -72,6 +72,8 @@ namespace TOR_ChanceModifier
         private FetchState _fetchState = FetchState.Loading;
         private float _nextFetchRetry;    // Failed state: the hash is fetched again from here on
         private string _fetchedHash;
+        private System.Threading.Tasks.Task<bool> _passwordCheck;
+        private string _passwordCheckRecord;
 
         private GameObject _panel;
         private TextMeshProUGUI _hintLabel;
@@ -114,6 +116,7 @@ namespace TOR_ChanceModifier
         {
             if (UsefulStuffActive) return;
 
+            PollPasswordCheck();
             TrustTick(false);
 
             // Left the lobby / returned to the menu: the GameStartManager.Update postfix that drives
@@ -389,9 +392,9 @@ namespace TOR_ChanceModifier
             www.downloadHandler.Dispose();
             www.Dispose();
 
-            if (raw.Length == 64 && IsValidHex(raw))
+            if (HostGuardSecurity.HostPasswordHash.IsSupported(raw))
             {
-                _fetchedHash = raw.ToLowerInvariant();
+                _fetchedHash = HostGuardSecurity.HostPasswordHash.Normalize(raw);
                 _fetchState = FetchState.Ready;
                 ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Hash loaded successfully.");
             }
@@ -435,14 +438,14 @@ namespace TOR_ChanceModifier
             www.downloadHandler.Dispose();
             www.Dispose();
 
-            if (raw.Length != 64 || !IsValidHex(raw))
+            if (!HostGuardSecurity.HostPasswordHash.IsSupported(raw))
             {
                 ChancePlugin.Logger?.LogWarning(
                     $"[ChanceLobbyPasswordGate] Re-check skipped — invalid hash file (length {raw.Length}).");
                 yield break; // skip
             }
 
-            string newHash = raw.ToLowerInvariant();
+            string newHash = HostGuardSecurity.HostPasswordHash.Normalize(raw);
 
             // If the initial load had failed, treat this success as the (now recovered) initial load.
             if (_fetchState != FetchState.Ready || _fetchedHash == null)
@@ -478,32 +481,51 @@ namespace TOR_ChanceModifier
 
         private void TryUnlock()
         {
-            if (_fetchState != FetchState.Ready || _fetchedHash == null) return;
-            try
+            if (_fetchState != FetchState.Ready || _fetchedHash == null) { return; }
+            if (_passwordCheck != null)
             {
-                byte[] inputBytes = Encoding.UTF8.GetBytes(_inputBuffer);
-                byte[] hashBytes  = SHA256.Create().ComputeHash(inputBytes);
-                string hex = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
-
                 _inputBuffer = "";
                 if (_maskedLabel != null) _maskedLabel.text = "";
-
-                if (hex == _fetchedHash)
-                {
-                    _unlocked = true;
-                    HidePanel();
-                    ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Unlocked.");
-                }
-                else
-                {
-                    ShowError("Wrong password.");
-                    ChancePlugin.Logger?.LogInfo("[ChanceLobbyPasswordGate] Wrong password attempt.");
-                }
+                return;
             }
-            catch (Exception ex)
+            _errorClearTimer = 0f;
+            string submitted = _inputBuffer;
+            _inputBuffer = "";
+            if (_maskedLabel != null) _maskedLabel.text = "";
+            _passwordCheckRecord = _fetchedHash;
+            _passwordCheck = HostGuardSecurity.HostPasswordHash.VerifyAsync(submitted, _passwordCheckRecord);
+            if (_statusLabel != null)
             {
-                ChancePlugin.Logger?.LogError($"[ChanceLobbyPasswordGate] Hash check failed: {ex}");
-                _inputBuffer = "";
+                _statusLabel.text = "Checking password...";
+                _statusLabel.color = new Color(1f, 0.85f, 0.4f);
+            }
+        }
+
+        private void PollPasswordCheck()
+        {
+            var check = _passwordCheck;
+            if (check == null || !check.IsCompleted) return;
+            string record = _passwordCheckRecord;
+            _passwordCheck = null;
+            _passwordCheckRecord = null;
+            if (check.IsFaulted) _ = check.Exception;
+            // Results for a rotated verifier must never unlock the current gate.
+            if (_fetchState != FetchState.Ready || !string.Equals(record, _fetchedHash, StringComparison.Ordinal))
+            { return; }
+            if (check.IsFaulted)
+            {
+                _ = check.Exception;
+                ShowError("Password check unavailable. Try again.");
+                return;
+            }
+            if (check.IsCompletedSuccessfully && check.Result)
+            {
+                _unlocked = true;
+                HidePanel();
+            }
+            else
+            {
+                ShowError("Wrong password.");
             }
         }
 

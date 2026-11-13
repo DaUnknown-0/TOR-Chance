@@ -111,11 +111,11 @@ namespace TOR_ChanceModifier {
 
             // First the Atom feed: not counted against the API's 60 requests per hour (ReleaseFeed).
             var feed = new UnityWebRequest();
+            feed.timeout = UnknownsNet.RequestTimeout;   // a hanging request must not keep the updater busy for the session
             feed.SetMethod(UnityWebRequest.UnityWebRequestMethod.Get);
             feed.SetUrl(ReleaseFeed.Url(RepositoryOwner, RepositoryName));
             feed.SetRequestHeader("User-Agent", $"TOR-ChanceModifier/{ChancePlugin.VersionString}");
             feed.downloadHandler = new DownloadHandlerBuffer();
-            feed.timeout = 15; // ohne Frist bliebe _busy bei einer haengenden Anfrage fuer immer true
             var feedOp = feed.SendWebRequest();
             while (!feedOp.isDone) yield return new WaitForEndOfFrame();
             bool fromFeed = false;
@@ -149,12 +149,12 @@ namespace TOR_ChanceModifier {
             }
 
             var www = new UnityWebRequest();
+            www.timeout = UnknownsNet.RequestTimeout;   // a hanging request must not keep the updater busy for the session
             www.SetMethod(UnityWebRequest.UnityWebRequestMethod.Get);
             www.SetUrl($"https://api.github.com/repos/{RepositoryOwner}/{RepositoryName}/releases");
             // GitHub weist UA-lose Clients ab (P2.8) — eindeutigen User-Agent setzen.
             www.SetRequestHeader("User-Agent", $"TOR-ChanceModifier/{ChancePlugin.VersionString}");
             www.downloadHandler = new DownloadHandlerBuffer();
-            www.timeout = 15;
             var operation = www.SendWebRequest();
 
             while (!operation.isDone) {
@@ -233,6 +233,7 @@ namespace TOR_ChanceModifier {
                 yield break;
             }
             var www = new UnityWebRequest();
+            www.timeout = UnknownsNet.DownloadTimeout;   // a hanging request must not keep the updater busy for the session
             www.SetMethod(UnityWebRequest.UnityWebRequestMethod.Get);
             www.SetUrl(asset.DownloadUrl);
             www.downloadHandler = new DownloadHandlerBuffer();
@@ -248,7 +249,8 @@ namespace TOR_ChanceModifier {
                 yield return new WaitForEndOfFrame();
             }
 
-            if (www.isNetworkError || www.isHttpError) {
+            // Only a PE image may replace the plugin: an error page that came back as HTTP 200 is a failed download.
+            if (www.isNetworkError || www.isHttpError || !UnknownsNet.IsPluginImage(www.downloadHandler.data)) {
                 _updateState = 3;
                 if (!managerMode) {
                     popup.TextAreaTMP.text = "Update wasn't successful\nTry again later,\nor update manually.";

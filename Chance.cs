@@ -740,9 +740,7 @@ namespace TOR_ChanceModifier {
         // jedem Client akzeptiert, könnte ein modifizierter Client beliebig Rollen würfeln, sich
         // Vents geben oder fremde Cooldowns nullen (P0.3). Daher nur vom Host annehmen.
         // RPC 251 (Version-Handshake) bleibt bewusst für ALLE Clients offen — das ist sein Zweck.
-        static bool IsFromHost(PlayerControl sender) =>
-            sender != null && AmongUsClient.Instance != null
-            && sender.OwnerId == AmongUsClient.Instance.HostId;
+        static bool IsFromHost(PlayerControl sender) => UnknownsNet.SenderIsHost(sender);
 
         [HarmonyPriority(Priority.High)]
         public static bool Prefix(byte callId, MessageReader reader, PlayerControl __instance) {
@@ -808,7 +806,8 @@ namespace TOR_ChanceModifier {
 
             if (callId == Chance.VersionHandshakeRpcId) {
                 // Handshake — bewusst von allen Clients akzeptiert (keine Host-Prüfung).
-                try { ChanceVersionHandshake.ReceiveRpc(reader); } catch { }
+                if (__instance == null) return false;
+                try { ChanceVersionHandshake.ReceiveRpc(reader, __instance.OwnerId); } catch { }
                 return false;
             }
 
@@ -1144,8 +1143,11 @@ namespace TOR_ChanceModifier {
             float num = dist;
             Vector2 truePosition = tp.GetTruePosition();
             foreach (var playerInfo in GameData.Instance.AllPlayers.GetFastEnumerator()) {
+                // Null guard: a late joiner or a player disconnecting at the wrong moment can have no
+                // Role yet; without the guard this prefix (which replaces TOR's setTarget) throws every frame.
+                if (playerInfo == null) continue;
                 if (!playerInfo.Disconnected && playerInfo.PlayerId != tp.PlayerId && !playerInfo.IsDead
-                    && (!onlyCrewmates || !playerInfo.Role.IsImpostor)) {
+                    && (!onlyCrewmates || (playerInfo.Role != null && !playerInfo.Role.IsImpostor))) {
                     PlayerControl @object = playerInfo.Object;
                     // AUDIT-2026-08-16: manual loop instead of Any(x => x == @object) - the lambda closes
                     // over @object, which changes every iteration, so LINQ allocated a fresh closure per

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <Target Name="ILRepacker" AfterTargets="Build">
+        <ItemGroup>
+            <InputAssemblies Include="$(TargetPath)" />
+            <InputAssemblies Include="$(TargetDir)Konscious.Security.Cryptography.Argon2.dll" />
+            <InputAssemblies Include="$(TargetDir)Konscious.Security.Cryptography.Blake2.dll" />
+            <LibraryPath Include="$(TargetDir)" />
+            <LibraryPath Include="@(ReferencePathWithRefAssemblies->'%(RootDir)%(Directory)')" />
+            <LibraryPath Include="$(NuGetPackageRoot)harmonyx\2.10.2\lib\netstandard2.0" />
+        </ItemGroup>
+        <ILRepack Parallel="true" Internalize="true" InputAssemblies="@(InputAssemblies)"
+                  LibraryPath="@(LibraryPath)" OutputFile="$(TargetPath)" />
+    </Target>
+</Project>
