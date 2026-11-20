@@ -261,6 +261,16 @@ namespace TOR_ChanceModifier
             if (!force && now < _nextTrustCheck) return;
             _nextTrustCheck = now + 0.5f;
 
+            // Während der Runde und auf dem Endbildschirm gibt es keine Lobby: Zustand nicht anfassen,
+            // sonst kippt er bei jedem Rundenstart auf "weg" und nach der Runde wieder zurück (nur Log).
+            try
+            {
+                var state = AmongUsClient.Instance?.GameState;
+                if (state == InnerNet.InnerNetClient.GameStates.Started
+                    || state == InnerNet.InnerNetClient.GameStates.Ended) return;
+            }
+            catch { }
+
             string who = null;
             try
             {
